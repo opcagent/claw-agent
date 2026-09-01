@@ -71,6 +71,17 @@ claw-agent/
 
 ## 快速开始
 
+### 0. 配置环境变量（首次启动必做）
+
+```bash
+# Windows PowerShell
+cp .env.example .env
+# 编辑 .env 文件，填写实际的数据库密码、Redis 密码、JWT Secret 等
+notepad .env
+```
+
+**重要**：`.env` 文件包含敏感信息，已被 `.gitignore` 忽略，不会提交到 Git。
+
 ### 1. 准备数据库
 
 ```sql
@@ -81,8 +92,24 @@ CREATE DATABASE claw_agent DEFAULT CHARSET utf8mb4;
 
 ### 2. 启动后端（端口 8080）
 
+**推荐方式：使用启动脚本（自动加载 .env）**
+
+```bash
+# Windows PowerShell
+./start-backend.ps1
+```
+
+**传统方式：手动设置环境变量**
+
 ```bash
 cd backend
+
+# Windows PowerShell - 手动加载 .env
+Get-Content ..\.env | Where-Object { $_ -match '^\w+=' } | ForEach-Object {
+    $name, $value = $_ -split '=', 2
+    [Environment]::SetEnvironmentVariable($name, $value, 'Process')
+}
+
 # 方式 1：直接运行（开发环境）
 mvn spring-boot:run
 
