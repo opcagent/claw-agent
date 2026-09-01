@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  菜单/权限表自定义 SQL 映射。
+  权限聚合为三级联表：sys_user_role -> sys_role_menu -> sys_menu。
+-->
+<mapper namespace="com.claw.agent.mapper.MenuMapper">
+
+    <!-- 菜单结果映射（sys_menu 全字段） -->
+    <resultMap id="menuResultMap" type="com.claw.agent.model.Menu">
+        <id column="id" property="id"/>
+        <result column="parent_id" property="parentId"/>
+        <result column="menu_name" property="menuName"/>
+        <result column="menu_type" property="menuType"/>
+        <result column="order_num" property="orderNum"/>
+        <result column="path" property="path"/>
+        <result column="icon" property="icon"/>
+        <result column="perms" property="perms"/>
+        <result column="visible" property="visible"/>
+        <result column="status" property="status"/>
+        <result column="create_time" property="createTime"/>
+        <result column="update_time" property="updateTime"/>
+    </resultMap>
+
+    <!-- 查询用户的全部启用权限标识（如 system:user:add） -->
+    <select id="selectPermsByUserId" resultType="java.lang.String">
+        SELECT DISTINCT m.perms
+        FROM sys_menu m
+                 INNER JOIN sys_role_menu rm ON rm.menu_id = m.id
+                 INNER JOIN sys_user_role ur ON ur.role_id = rm.role_id
+        WHERE ur.user_id = #{userId}
+          AND m.status = 1
+          AND m.perms IS NOT NULL
+          AND m.perms != ''
+    </select>
+
+    <!-- 查询用户可见的菜单（目录/菜单，不含按钮），用于构建前端路由 -->
+    <select id="selectMenusByUserId" resultMap="menuResultMap">
+        SELECT DISTINCT m.id, m.parent_id, m.menu_name, m.menu_type, m.order_num,
+                        m.path, m.icon, m.perms, m.visible, m.status,
+                        m.create_time, m.update_time
+        FROM sys_menu m
+                 INNER JOIN sys_role_menu rm ON rm.menu_id = m.id
+                 INNER JOIN sys_user_role ur ON ur.role_id = rm.role_id
+        WHERE ur.user_id = #{userId}
+          AND m.status = 1
+          AND m.menu_type IN ('M', 'C')
+        ORDER BY m.parent_id, m.order_num
+    </select>
+
+</mapper>

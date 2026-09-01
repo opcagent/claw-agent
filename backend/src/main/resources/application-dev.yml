@@ -1,0 +1,75 @@
+# ============================================================
+# claw-agent 开发环境配置
+# ============================================================
+server:
+  port: 8080
+
+spring:
+  # MySQL 数据源（需提前创建数据库：CREATE DATABASE claw_agent DEFAULT CHARSET utf8mb4;）
+  datasource:
+    url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/${MYSQL_DB:claw_agent}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&cacheResultSetMetadata=true
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: ${MYSQL_USER:root}
+    password: ${MYSQL_PASSWORD:root}
+    # HikariCP 连接池调优（WebFlux 非阻塞 I/O，连接占用时间短，池不宜过大）
+    hikari:
+      maximum-pool-size: ${HIKARI_MAX_POOL:15}       # 最大连接数（默认 10 偏小，Agent 对话每条消息 3~5 次查询）
+      minimum-idle: ${HIKARI_MIN_IDLE:5}              # 最小空闲连接（低于此值不回收，减少突发流量时的建连延迟）
+      connection-timeout: 5000                        # 获取连接超时 5s（超时说明池已满或 MySQL 慢查询，不应久等）
+      idle-timeout: 300000                            # 空闲连接存活 5min（高于 minimum-idle 的部分超时回收）
+      max-lifetime: 900000                            # 连接最大存活 15min（避免 MySQL wait_timeout 导致死连接）
+      leak-detection-threshold: 30000                 # 连接泄漏检测 30s（开发期快速发现未关闭连接，生产可调大或设 0 关闭）
+  # Redis 连接（AgentScope 分布式会话状态存储 + 通用缓存）
+  data:
+    redis:
+      host: ${REDIS_HOST:172.16.1.251}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:energy666}
+      database: ${REDIS_DB:0}
+      timeout: 3s
+      lettuce:
+        pool:
+          max-active: 16
+          max-idle: 8
+          min-idle: 2
+
+# ------------------------------------------------------------
+# 应用自定义配置（开发环境）
+# ------------------------------------------------------------
+claw:
+  # JWT 配置
+  jwt:
+    secret: ${CLAW_JWT_SECRET:a0c98809-d5ab-4e26-8bca-24ac8dddf110}   # 开发环境默认值，生产必须用环境变量覆盖
+  # 上传文件存储目录（相对项目根目录）
+  upload:
+    dir: D:/claw-agent/data/uploads
+    max-size-mb: 20
+  # Agent 基础配置（模型提供商/状态存储/权限模式等已数据库化）
+  agent:
+    name: claw-assistant        # Agent 名称
+    workspace: D:/claw-agent/.agentscope/workspace   # 工作区根路径（绝对路径，按 租户/用户 分子目录隔离）
+  # 跨域（前后端分离）：允许的前端来源，开发环境宽松配置
+  cors:
+    allowed-origin-patterns: ${CORS_ORIGINS:http://localhost:3000,http://127.0.0.1:3000}
+
+logging:
+  level:
+    com.claw.agent.mapper: DEBUG   # 开发期打印 SQL（参数 + 结果）
+
+# ------------------------------------------------------------
+# OpenAPI 文档 + Swagger UI（仅开发环境开启）
+# 访问地址：
+#   Swagger UI   → http://localhost:8080/swagger-ui/index.html
+#   OpenAPI JSON → http://localhost:8080/v3/api-docs
+# ------------------------------------------------------------
+springdoc:
+  api-docs:
+    enabled: true
+    path: /v3/api-docs
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui
+    tags-sorter: alpha
+    operations-sorter: alpha
+  packages-to-scan: com.claw.agent.controller
+  default-produces-media-type: application/json

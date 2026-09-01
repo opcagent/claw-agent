@@ -1,0 +1,9 @@
+# Maven 构建产物（根目录 .gitignore 已全局忽略，此处保证子目录独立克隆时同样生效）
+target/
+
+# Maven 插件生成物
+.flattened-pom.xml
+dependency-reduced-pom.xml
+
+# 本地运行期目录
+data/

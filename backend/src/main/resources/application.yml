@@ -1,0 +1,109 @@
+# ============================================================
+# claw-agent 主配置（公共部分）
+# 模型提供商与 Agent 运行参数已数据库化（三级作用域：USER > TENANT > GLOBAL），
+# 由 ConfigService 从 model_provider_config / agent_config 表解析，
+# 在"系统管理"页面维护，无需在此配置。
+# ============================================================
+spring:
+  application:
+    name: claw-agent
+  # Jackson：统一时间格式（JSR-310 类型的具体格式由 config/JacksonConfig 定制为 yyyy-MM-dd HH:mm:ss）
+  jackson:
+    time-zone: Asia/Shanghai          # Date/Calendar 类型的时区基准；LocalDateTime 无时区不受影响
+    date-format: yyyy-MM-dd HH:mm:ss  # java.util.Date 格式（兼容老类型）
+  # WebFlux 表单/查询参数的时间绑定格式（JSON 体由 Jackson 负责，此处覆盖 form/query 通道）
+  webflux:
+    format:
+      date-time: "yyyy-MM-dd HH:mm:ss"
+      date: "yyyy-MM-dd"
+      time: "HH:mm:ss"
+    codec:
+      max-in-memory-size: 50MB    # WebFlux 文件上传的内存缓冲上限（Spring Boot 3.4+ 从 spring.codec 迁移至此）
+  # Flyway：数据库增量版本管理，迁移脚本位于 classpath:db/migration/（V1__xxx.sql 递增）
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true        # 存量库首次接入时自动打 baseline，不强制清库
+    validate-on-migrate: true        # 校验已执行脚本未被篡改（阿里规约：迁移脚本只增不改）
+    out-of-order: false              # 禁止乱序执行，保证环境一致性
+
+# ------------------------------------------------------------
+# MyBatis Plus 配置
+# ------------------------------------------------------------
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml   # 自定义 SQL 统一放 XML，禁止注解 SQL（阿里规约）
+  configuration:
+    map-underscore-to-camel-case: true   # 下划线字段自动转驼峰（create_time -> createTime）
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+  global-config:
+    banner: false
+    db-config:
+      id-type: auto               # 主键自增
+      logic-delete-field: deleted # 逻辑删除字段名（预留）
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+# ------------------------------------------------------------
+# 应用自定义配置（仅保留启动期基础项；模型/运行参数见数据库三级配置）
+# ------------------------------------------------------------
+claw:
+  # 平台版本信息（对外展示：页脚版本号 / 通知中心发布说明）
+  version:
+    number: 1.0.0
+    name: Claw Agent
+    release-date: "2026-08-26"
+    highlights:
+      - 人格预设与自动化流水线上线，支持三级作用域复用
+      - 模型提供商接入字典驱动的模型目录，按厂商预置候选模型
+      - 通知中心启用，平台版本动态与公告统一触达
+  # JWT 配置
+  jwt:
+    expiration-hours: 24        # token 有效期（小时）
+  # Redis 可选配置：未安装 Redis 时自动降级到本地 JSON 存储（true/false/auto，auto 启动时自动探测）
+  redis:
+    enabled: ${REDIS_ENABLED:auto}
+  # HTTP 代理配置（用于联网搜索等需要访问外网的服务，中国大陆网络环境下建议配置）
+  # 注意：如果不需要代理，请将 enabled 设为 false，或注释掉整个 proxy 段
+  proxy:
+    http:
+      host: ${HTTP_PROXY_HOST:}      # 留空表示不使用代理
+      port: ${HTTP_PROXY_PORT:0}     # 0 表示不使用代理
+  # 多搜索引擎配置（降级链：Tavily → Brave → Bing → SearXNG → DuckDuckGo）
+  # API Key 已迁移到数据库（三级作用域：USER > TENANT > PLATFORM），在前端「系统配置」页面维护
+  search:
+    engines: tavily,brave,bing,searxng,duckduckgo   # 搜索引擎优先级（按顺序降级）
+    timeout-seconds: 15                        # 单次搜索超时
+    max-results: 8                             # 最大返回条数
+    tavily:
+      base-url: https://api.tavily.com
+      search-depth: basic                      # basic / advanced
+    brave:
+      base-url: https://api.search.brave.com
+    bing:
+      base-url: https://api.bing.microsoft.com
+    searxng:
+      base-url: ${SEARXNG_URL:}                # 本地 Docker: http://localhost:8888 或公共实例
+      engines: google,bing                     # SearXNG 内部使用的后端引擎
+  # OCR 识别配置（多厂商降级：百度智能云 → 腾讯云）
+  # 凭证已迁移到数据库三级作用域，此处仅为回退默认值
+  ocr:
+    baidu:
+      api-key: ${BAIDU_OCR_API_KEY:}
+      secret-key: ${BAIDU_OCR_SECRET_KEY:}
+    tencent:
+      secret-id: ${TENCENT_OCR_SECRET_ID:}
+      secret-key: ${TENCENT_OCR_SECRET_KEY:}
+
+logging:
+  pattern:
+    # 日志模式带 MDC traceId（由 TraceFilter 逐请求生成/桥接），一次请求全链路日志可按 traceId 聚合
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %5p [%15.15t] [%X{traceId:-}] %-40.40logger{39} : %m%n%wEx"
+  level:
+    com.claw.agent: INFO
+    io.agentscope: INFO
+
+---
+# 激活默认 profile（开发环境）
+spring:
+  profiles:
+    active: dev
