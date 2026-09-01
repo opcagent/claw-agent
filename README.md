@@ -4,6 +4,15 @@
   <a href="#chinese">中文</a> · <a href="#english">English</a>
 </p>
 
+<p align="center">
+  <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License" />
+  <img src="https://img.shields.io/badge/Java-17+-orange.svg" alt="Java Version" />
+  <img src="https://img.shields.io/badge/Spring%20Boot-3.5-green.svg" alt="Spring Boot" />
+  <img src="https://img.shields.io/badge/Next.js-16-black.svg" alt="Next.js" />
+  <img src="https://img.shields.io/badge/AgentScope-2.0-purple.svg" alt="AgentScope" />
+  <img src="https://img.shields.io/github/stars/KittyMi/claw-agent?style=social" alt="GitHub Stars" />
+</p>
+
 ---
 
 <a id="chinese"></a>
