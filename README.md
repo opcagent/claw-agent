@@ -1,5 +1,304 @@
 # claw-agent
 
+<p align="center">
+  <a href="#english">English</a> · <a href="#chinese">中文</a>
+</p>
+
+---
+
+<a id="english"></a>
+
+# claw-agent (English)
+
+**A private AI Agent platform for individuals and small teams** - Multi-tenant intelligent assistant service based on AgentScope Java 2.0.
+
+Single-instance service serving all users, with session isolation by `(userId, sessionId)`; supports streaming chat (SSE), multimodal messages, HITL human approval, dynamic tool system, Token usage tracking, and complete RBAC permission system.
+
+**Core Features**:
+-  **Zero-cost startup**: Built-in free model providers (Ollama/Groq/HuggingFace), no API Key required
+- 🔧 **Dynamic tool registration**: `@ToolSet` annotation scanning for automatic registration, runtime enable/disable, zero-intrusion extension
+- 📊 **Token usage tracking**: Automatic model call consumption recording, monthly summary, admin view
+- 🔐 **Enterprise-grade permissions**: Three-tier RBAC (Platform Admin / Tenant Admin / Common User), menu-level authorization
+- 🌐 **MCP protocol support**: Integration with external tool servers (Git/GitHub/Chrome DevTools)
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| **Backend** | Java 17+ · Spring Boot 3.5 (WebFlux reactive + SSE) · Spring Security (JWT stateless) |
+| **Agent** | AgentScope Java 2.0: Workspace personality, layered memory, context compression, sub-agents, Plan Mode, Middleware |
+| **Data** | MySQL 8.x + Flyway migrations · MyBatis Plus 3.5 · Redis 7.x (Agent session state storage) |
+| **Frontend** | Next.js 16 · React 19 · TypeScript 5 · Tailwind CSS 4 · Base UI/shadcn · Zustand · Recharts |
+
+> **Architecture**: Single-instance architecture, one Spring Boot service serving all users, session isolation via `(userId, sessionId)`. Suitable for individual developers and small teams (5-50 people), not for large-scale concurrent scenarios.
+
+## Project Structure
+
+```
+claw-agent/
+├── backend/              # Spring Boot backend (Maven)
+│   ├── src/main/java/    # Java source code (controller/service/mapper/config/security/tool)
+│   └── src/main/resources/
+│       ├── db/migration/ # Flyway database migration scripts (V1-V49)
+│       └── mapper/       # MyBatis XML SQL
+├── frontend/             # Next.js frontend (npm)
+│   ├── src/app/          # App Router pages (login/chat/system/*)
+│   ├── src/components/   # React components (AppShell/ChatView/UI Primitives)
+│   ── src/lib/          # API Client / Types / Utils
+├── docs/                 # Complete documentation (platform definition/capabilities/API specs)
+── AGENTS.md             # Coding conventions (must-read for all contributors)
+```
+
+Backend layering: `controller → service → mapper` (unidirectional dependency, DTO isolation), package structure `com.claw.agent.<layer>`. Detailed architecture see [docs/PLATFORM_DEFINITION.md](docs/PLATFORM_DEFINITION.md).
+
+## Requirements
+
+- **JDK**: 17+ (recommended 21, Spring Boot 3.5 minimum requirement 17)
+- **Maven**: 3.8+
+- **Node.js**: 18+ (frontend development, recommended 20)
+- **MySQL**: 8.0+
+- **Redis**: 6.0+ (optional, single-machine development can downgrade to JSON file storage)
+- **Docker** (optional): For containerized deployment
+
+## Quick Start
+
+### 1. Prepare Database
+
+```sql
+CREATE DATABASE claw_agent DEFAULT CHARSET utf8mb4;
+```
+
+Table structure is automatically migrated by Flyway at startup (`backend/src/main/resources/db/migration/`, append-only).
+
+### 2. Start Backend (Port 8080)
+
+```bash
+cd backend
+# Method 1: Direct run (development environment)
+mvn spring-boot:run
+
+# Method 2: Package then run (production environment)
+mvn clean package -DskipTests
+java -jar target/backend-1.0.0-SNAPSHOT.jar
+```
+
+On first startup, Flyway will automatically execute database migrations (V1-V49), creating all table structures and initial data.
+
+### 3. Start Frontend (Port 3000)
+
+```bash
+cd frontend
+npm install      # Install dependencies (first time only)
+npm run dev      # Development mode (hot reload)
+# npm run build  # Production build
+# npm run start  # Production mode
+```
+
+Visit <http://localhost:3000>, default account: `admin` / `admin123` (Platform Administrator).
+
+**Configuration**: Model providers and Agent runtime parameters are maintained in the "Platform Governance → Model Configuration" page after login (database three-tier scope: USER > TENANT > PLATFORM), no need to modify code or restart services. On first startup, the admin account will be automatically created and assigned the platform administrator role.
+
+## Environment Variables
+
+All configurations have local development defaults, override as needed for production deployment:
+
+| Variable | Default | Description |
+|---|---|---|
+| `MYSQL_HOST` / `MYSQL_PORT` / `MYSQL_DB` | `localhost` / `3306` / `claw_agent` | MySQL connection |
+| `MYSQL_USER` / `MYSQL_PASSWORD` | (required) | MySQL credentials |
+| `REDIS_HOST` / `REDIS_PORT` / `REDIS_DB` | `localhost` / `6379` / `0` | Redis connection |
+| `REDIS_PASSWORD` | (empty) | Redis password |
+| `CLAW_JWT_SECRET` | (required) | **Production must change**: JWT signing key (also derives config encryption key) |
+| `CORS_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | Allowed frontend origins, comma-separated |
+| `HTTP_PROXY_HOST` / `HTTP_PROXY_PORT` | (empty) | HTTP proxy (web_search tool needs this in mainland China network environment) |
+
+**Note**: PowerShell set environment variable example:
+```powershell
+$env:CLAW_JWT_SECRET="your-secret-key-change-in-production"
+$env:MYSQL_HOST="192.168.1.100"
+```
+
+See [.env.example](.env.example) for complete template.
+
+## Main Features
+
+### ✅ Implemented Core Capabilities
+
+#### 1. Multi-tenancy & Permission System (⭐⭐⭐⭐⭐)
+- **Three-tier roles**: Platform Admin (`admin`) / Tenant Admin (`tenant_admin`) / Common User (`common`)
+- **RBAC menu authorization**: Backend aggregates menu tree by role, frontend dynamically renders navigation
+- **Tenant data isolation**: All queries enforce `.eq(tenantId, current.getTenantId())`
+- **Platform Admin exclusive**: Create/delete tenants, assign tenant administrators
+
+#### 2. Intelligent Chat System (⭐⭐⭐⭐⭐)
+- **SSE streaming output**: `POST /api/chat/stream` returns Server-Sent Events
+- **Multimodal support**: Base64 image attachments directly fed to models
+- **Preset personality overlay**: `presetCode` parameter injects template prompts
+- **HITL human confirmation**: Popup approval before sensitive tool execution (`/api/chat/confirm`)
+- **Session history persistence**: Automatically save chat records to database
+- **Session archive**: Archive/unarchive sessions for organization
+
+#### 3. Dynamic Tool Registration System (⭐⭐⭐⭐⭐)
+- **Annotation scanning auto-registration**: `@ToolSet` defines toolset metadata, auto-scanned at startup
+- **Runtime enable/disable**: `/api/tools/{code}/enable` / `/disable`
+- **Tool detail extraction**: Reflective scan of `@Tool` methods, generate structured descriptions
+- **6-category taxonomy**: utility / search / data / code / ai / system
+- **Built-in toolsets**: system_tools / math_tools / multi_search / note_tools
+
+#### 4. Token Usage Statistics (⭐⭐⭐⭐)
+- **Usage log table**: `token_usage_log` records each model call (prompt_tokens/completion_tokens/total_tokens)
+- **Monthly summary table**: `token_usage_summary` monthly aggregation, database trigger auto-maintains
+- **Admin view**: User Token usage ranking within tenant (visible only to platform/tenant admins)
+- ⚠️ **Known limitation**: Auto-interception logic not implemented, currently use test interface `POST /api/token-usage/test-record` to manually verify pipeline
+
+#### 5. Model Provider Configuration (⭐⭐⭐⭐⭐)
+- **Three-tier scope**: PLATFORM / TENANT / USER
+- **Nearest override resolution**: User-level → Tenant-level → Platform-level, priority descending
+- **8+ provider support**: DashScope / DeepSeek / OpenAI / Ollama / Groq / HuggingFace / Alibaba Cloud Bailian / Volcengine
+- **Free models built-in**: Ollama (local) / Groq (cloud free quota) / HuggingFace
+
+#### 6. MCP Server Integration (⭐⭐⭐⭐)
+- **Platform-level sharing**: All tenants share the same MCP server configuration
+- **Two transport protocols**: stdio (local process) / http (remote service)
+- **5 free MCPs**: Git / GitHub / Chrome DevTools / SQLite / PostgreSQL
+- ⚠️ **Note**: AgentScope Java does not support direct remote MCP connection, requires `mcp-remote` bridge
+
+#### 7. AgentScope Full Capabilities (⭐⭐⭐⭐)
+- **HarnessAgent singleton**: Global single instance, state isolated by `(userId, sessionId)`
+- **Workspace personality**: `.agentscope/workspace/AGENTS.md` defines Agent persona
+- **Layered memory**: Short-term (in-session) + Long-term (cross-session persistence)
+- **Context compression**: Auto-distill summary when message count exceeds threshold
+- **Redis state storage**: `RedisAgentStateStore` supports distributed deployment
+
+### ⚠️ Partially Implemented/Pending
+
+- **Online monitoring** (🚧 In development): Simplified implementation (memory Map recording), no WebSocket real-time push
+- **Skills library** (❌ Planned): Directory not created, need to initialize `skills/` directory and write SKILL.md
+- **Sub-agent delegation** (⚠️ Partially implemented): Framework supported, complex task decomposition effects not fully verified
+- **Token auto-interception** (️ Partially implemented): Test interface usable, auto-extract usage needs to consult AgentScope 2.0 official docs
+
+## Docker Deployment (Optional)
+
+Provides `docker-compose.yml` for one-click full environment startup:
+
+```bash
+# 1. Edit environment variables in docker-compose.yml (especially CLAW_JWT_SECRET)
+# 2. Start all services
+docker-compose up -d
+
+# 3. View logs
+docker-compose logs -f backend
+
+# 4. Stop services
+docker-compose down
+```
+
+Services include: MySQL 8.4 + Redis 7 + Backend (8080) + Frontend (3000)
+
+## Development Conventions
+
+- **Coding conventions**: See [AGENTS.md](AGENTS.md) - layering, naming, comments, exception logging, Flyway, security baseline
+- **Commit message format**: `<type>: <description>`, type ∈ {feat, fix, docs, refactor, test, chore}
+- **Schema changes**: Always go through Flyway migration scripts (version increment, idempotent scripts, append-only)
+- **API spec**: Non-streaming interfaces unified `Result<T>`, SSE interfaces return `Flux<ServerSentEvent<String>>`
+- **Time format**: `yyyy-MM-dd HH:mm:ss` (UTC+8), Jackson global config
+
+## Related Documentation
+
+-  [Platform Definition](docs/PLATFORM_DEFINITION.md) - Complete feature list, API specs, database design
+- 📊 [Capability Maturity Assessment](docs/PLATFORM_CAPABILITIES.md) - Feature grading and positioning based on final implementation
+-  [Dynamic Tool Registration System](docs/DYNAMIC_TOOL_REGISTRY.md) - @ToolSet annotation usage guide
+- 📈 [Token Usage Tracking System](docs/TOKEN_USAGE_TRACKING.md) - Database design and API specs
+- 🆓 [Free Models & MCP Configuration](docs/FREE_MCP_AND_SKILLS_PLATFORM.md) - Zero-cost startup guide
+-  [HTTP Proxy Configuration](docs/PROXY_CONFIG.md) - web_search tool configuration in mainland China network environment
+- 📝 [Pipeline Playbook Usage Guide](docs/PIPELINE_USAGE_GUIDE.md) - 3 built-in pipelines detailed explanation and customization tutorial
+
+## FAQ
+
+### Q1: How to add a new toolset?
+
+Just three steps:
+1. Create tool class and add `@ToolSet` annotation
+2. Write `@Tool` annotated methods in the class
+3. Restart application, auto-scan and register
+
+Example:
+```java
+@ToolSet(
+    code = "weather_tools",
+    name = "Weather Tools",
+    description = "Query weather forecast",
+    category = "utility",
+    enabledByDefault = true
+)
+@Component
+public class WeatherTools {
+    @Tool(name = "get_weather", description = "Get city weather")
+    public String getWeather(@ToolParam("City name") String city) {
+        return "Sunny, 25°C";
+    }
+}
+```
+
+### Q2: How to implement automatic Token recording?
+
+Current version has completed database design and test interface, but auto-interception logic not yet implemented. Future solutions:
+1. **Option A**: Research correct AgentScope 2.0 Middleware API
+2. **Option B**: Extract usage from `end` event in `AgentService.doChat()`
+3. **Option C**: Create ModelWrapper wrapper, record before/after calls
+
+See [TOKEN_USAGE_INTEGRATION.md](docs/TOKEN_USAGE_INTEGRATION.md)
+
+### Q3: How to configure free models?
+
+Visit **Platform Governance → Model Providers**, click "Add":
+- **Ollama**: `provider=ollama`, `baseUrl=http://localhost:11434/v1`, `apiKey=null`
+- **Groq**: `provider=openai`, `baseUrl=https://api.groq.com/openai/v1`, `apiKey=<your-key>`
+
+Detailed configuration see [FREE_MODEL_PROVIDERS.md](docs/FREE_MODEL_PROVIDERS.md)
+
+### Q4: Can tenant admins see other tenants' data?
+
+**No**. All Service layer queries enforce `.eq(tenantId, current.getTenantId())` to ensure data isolation. Platform Admin (`admin`) is exception, can cross-tenant query and manage.
+
+**Role permission matrix**:
+- **Platform Admin(admin)**: Global highest privilege, manage all tenants, assign tenant admins
+- **Tenant Admin(tenant_admin)**: Manage users/roles/menus within own tenant only
+- **Common User(common)**: Own tenant business functions only (chat, view own Token stats)
+
+### Q5: How to backup and restore data?
+
+```bash
+# Backup
+mysqldump -u root -p claw_agent > backup_$(date +%Y%m%d).sql
+
+# Restore
+mysql -u root -p claw_agent < backup_20260827.sql
+```
+
+## License
+
+MIT License - See [LICENSE](LICENSE) file
+
+## Contributing
+
+Welcome to submit Issues and Pull Requests! Please follow coding conventions in [AGENTS.md](AGENTS.md).
+
+---
+
+**Author**: Ryder  
+**Platform Maintainers**: Claw Agent Team  
+**Feedback Channel**: GitHub Issues  
+**Last Updated**: 2026-09-01
+
+[↑ Back to Top](#claw-agent)
+
+---
+
+<a id="chinese"></a>
+
+# claw-agent
+
 **个人/小团队私有化部署的 AI Agent 平台** - 基于 AgentScope Java 2.0的多租户智能助手服务。
 
 单实例服务所有用户，按 `(userId, sessionId)` 隔离会话状态；支持流式对话（SSE）、多模态消息、HITL 人工审批、动态工具系统、Token 使用统计与完整的 RBAC 权限体系。
@@ -29,7 +328,7 @@ claw-agent/
 ├── backend/              # Spring Boot 后端（Maven）
 │   ├── src/main/java/    # Java 源码（controller/service/mapper/config/security/tool）
 │   └── src/main/resources/
-│       ├── db/migration/ # Flyway 数据库迁移脚本（V1-V35）
+│       ├── db/migration/ # Flyway 数据库迁移脚本（V1-V49）
 │       └── mapper/       # MyBatis XML SQL
 ├── frontend/             # Next.js 前端（npm）
 │   ├── src/app/          # App Router 页面（login/chat/system/*）
@@ -54,7 +353,7 @@ claw-agent/
 
 ### 1. 准备数据库
 
-```sql
+``sql
 CREATE DATABASE claw_agent DEFAULT CHARSET utf8mb4;
 ```
 
@@ -72,7 +371,7 @@ mvn clean package -DskipTests
 java -jar target/backend-1.0.0-SNAPSHOT.jar
 ```
 
-首次启动时 Flyway 会自动执行数据库迁移（V1-V35），创建所有表结构和初始数据。
+首次启动时 Flyway 会自动执行数据库迁移（V1-V49），创建所有表结构和初始数据。
 
 ### 3. 启动前端（端口 3000）
 
@@ -95,19 +394,20 @@ npm run dev      # 开发模式（热重载）
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `MYSQL_HOST` / `MYSQL_PORT` / `MYSQL_DB` | `localhost` / `3306` / `claw_agent` | MySQL 连接 |
-| `MYSQL_USER` / `MYSQL_PASSWORD` | `root` / `root` | MySQL 账号 |
+| `MYSQL_USER` / `MYSQL_PASSWORD` | (required) | MySQL 账号 |
 | `REDIS_HOST` / `REDIS_PORT` / `REDIS_DB` | `localhost` / `6379` / `0` | Redis 连接 |
 | `REDIS_PASSWORD` | （空） | Redis 密码 |
-| `CLAW_JWT_SECRET` | 占位值 | **生产必改**：JWT 签名密钥（同时派生配置加密密钥） |
+| `CLAW_JWT_SECRET` | (required) | **生产必改**：JWT 签名密钥（同时派生配置加密密钥） |
 | `CORS_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | 允许的前端来源，逗号分隔 |
-| `DASHSCOPE_API_KEY` / `DEEPSEEK_API_KEY` / `OPENAI_API_KEY` | （空） | 模型 API Key 兜底（库中未配置时读取） |
 | `HTTP_PROXY_HOST` / `HTTP_PROXY_PORT` | （空） | HTTP 代理（中国大陆网络环境下 web_search 工具需要） |
 
 **注意**：PowerShell 设置环境变量示例：
-```powershell
+``powershell
 $env:CLAW_JWT_SECRET="your-secret-key-change-in-production"
 $env:MYSQL_HOST="192.168.1.100"
 ```
+
+见 [.env.example](.env.example) 以获取完整模板。
 
 ## 主要功能
 
@@ -125,6 +425,7 @@ $env:MYSQL_HOST="192.168.1.100"
 - **预设人格叠加**：`presetCode` 参数注入模板提示词
 - **HITL 人工确认**：敏感工具执行前弹窗审批 (`/api/chat/confirm`)
 - **会话历史持久化**：自动保存聊天记录到数据库
+- **会话归档**：归档/取消归档会话以组织
 
 #### 3. 动态工具注册系统 (⭐⭐⭐⭐⭐)
 - **注解扫描自动注册**：`@ToolSet` 定义工具集元数据，启动时自动扫描
@@ -134,9 +435,6 @@ $env:MYSQL_HOST="192.168.1.100"
 - **内置工具集**：system_tools / math_tools / multi_search / note_tools
 
 #### 4. Token 使用统计 (⭐⭐⭐⭐)
-
-**状态**: ⚠️ 部分实现
-
 - **流水记录表**：`token_usage_log` 记录每次模型调用（prompt_tokens/completion_tokens/total_tokens）
 - **月度汇总表**：`token_usage_summary` 按月聚合统计，数据库触发器自动维护
 - **管理员视图**：租户内用户 Token 使用排行（仅平台管理员/租户管理员可见）
@@ -145,7 +443,7 @@ $env:MYSQL_HOST="192.168.1.100"
 #### 5. 模型提供商配置 (⭐⭐⭐⭐⭐)
 - **三级作用域**：PLATFORM (平台级) / TENANT (租户级) / USER (用户级)
 - **就近覆盖解析**：用户级 → 租户级 → 平台级，优先级递减
-- **8+ 提供商支持**：DashScope / DeepSeek / OpenAI / Ollama / Groq / HuggingFace / 阿里云百炼
+- **8+ 提供商支持**：DashScope / DeepSeek / OpenAI / Ollama / Groq / HuggingFace / 阿里云百炼 / 字节跳动
 - **免费模型内置**：Ollama (本地) / Groq (云端免费额度) / HuggingFace
 
 #### 6. MCP 服务器集成 (⭐⭐⭐⭐)
@@ -172,7 +470,7 @@ $env:MYSQL_HOST="192.168.1.100"
 
 提供 `docker-compose.yml` 一键启动完整环境：
 
-```bash
+```
 # 1. 编辑 docker-compose.yml 中的环境变量（特别是 CLAW_JWT_SECRET）
 # 2. 启动所有服务
 docker-compose up -d
@@ -214,7 +512,7 @@ docker-compose down
 3. 重启应用，自动扫描注册
 
 示例：
-```java
+``java
 @ToolSet(
     code = "weather_tools",
     name = "天气工具",
@@ -259,7 +557,7 @@ public class WeatherTools {
 
 ### Q5: 如何备份与恢复数据？
 
-```bash
+```
 # 备份
 mysqldump -u root -p claw_agent > backup_$(date +%Y%m%d).sql
 
@@ -280,4 +578,6 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 **作者**: Ryder  
 **平台维护者**: Claw Agent Team  
 **反馈渠道**: GitHub Issues  
-**最后更新**: 2026-08-28
+**最后更新**: 2026-09-01
+
+[↑ 回到顶部](#claw-agent)
