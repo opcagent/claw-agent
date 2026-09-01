@@ -85,14 +85,14 @@ claw:
       base-url: ${SEARXNG_URL:}                # 本地 Docker: http://localhost:8888 或公共实例
       engines: google,bing                     # SearXNG 内部使用的后端引擎
   # OCR 识别配置（多厂商降级：百度智能云 → 腾讯云）
-  # 凭证已迁移到数据库三级作用域，此处仅为回退默认值
+  # ⚠️ 敏感信息：凭证已迁移到数据库三级作用域，此处仅为回退配置（生产环境必须通过环境变量设置）
   ocr:
     baidu:
-      api-key: ${BAIDU_OCR_API_KEY:}
-      secret-key: ${BAIDU_OCR_SECRET_KEY:}
+      api-key: ${BAIDU_OCR_API_KEY}          # ⚠️ 必填，不得留空
+      secret-key: ${BAIDU_OCR_SECRET_KEY}    # ⚠️ 必填，不得留空
     tencent:
-      secret-id: ${TENCENT_OCR_SECRET_ID:}
-      secret-key: ${TENCENT_OCR_SECRET_KEY:}
+      secret-id: ${TENCENT_OCR_SECRET_ID}    # ⚠️ 必填，不得留空
+      secret-key: ${TENCENT_OCR_SECRET_KEY}  # ⚠️ 必填，不得留空
 
 logging:
   pattern:
