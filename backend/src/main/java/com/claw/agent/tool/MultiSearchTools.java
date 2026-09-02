@@ -127,8 +127,21 @@ public class MultiSearchTools {
             @ToolParam(name = "query", description = "搜索关键词") String query,
             RuntimeContext rc) {
         List<String> errors = new ArrayList<>();
+        long startTime = System.currentTimeMillis();
+        // 工具执行总超时 30s（ExecutionConfig），单次搜索超时由 searchConfig 控制（默认 15s）；
+        // 剩余时间不足单次超时时跳过后续引擎，避免无意义的超时中断
+        int perSearchTimeout = searchConfig.getTimeoutSeconds() * 1000;
+        int toolTimeoutMs = 30_000;
 
         for (String engine : searchConfig.getEngines()) {
+            long elapsed = System.currentTimeMillis() - startTime;
+            int remaining = toolTimeoutMs - (int) elapsed;
+            if (remaining < perSearchTimeout) {
+                log.info("搜索引擎 {} 跳过（剩余 {}ms < 单次超时 {}ms）: query={}",
+                        engine, remaining, perSearchTimeout, query);
+                errors.add(engine + ": 剩余时间不足，跳过");
+                continue;
+            }
             try {
                 String result = switch (engine) {
                     case "tavily" -> searchTavily(query, rc);
