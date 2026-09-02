@@ -186,7 +186,7 @@ public class AgentService {
             String providerName = providerCfg.getProvider();
             String modelName = providerCfg.getModelName();
 
-            log.info("发起对话: user={}, session={}, preset={}, pipeline={}",
+            log.debug("发起对话: user={}, session={}, preset={}, pipeline={}",
                     user.getUsername(), effectiveSessionId, request.getPresetCode(), request.getPipelineCode());
             // 流式段累积助手回复，回合结束（end 事件）一次性落库；
             // 中途异常时把已产出部分以失败状态落库，不丢用户已看到的输出。
@@ -268,7 +268,7 @@ public class AgentService {
                     friendlyMessage(e), null, ChatMessage.STATUS_FAIL);
             throw e;
         }
-        log.info("HITL 确认恢复: user={}, session={}, approved={}, toolCount={}",
+        log.debug("HITL 确认恢复: user={}, session={}, approved={}, toolCount={}",
                 user.getUsername(), sessionId, approved, pending.size());
         // 回合级缓存模型提供商信息
         ModelProviderConfig providerCfg = configService.resolveCurrentProvider(user.getTenantId(), user.getUserId());
@@ -305,7 +305,8 @@ public class AgentService {
                 new LambdaQueryWrapper<ChatSession>()
                         .eq(ChatSession::getUsername, user.getUsername())
                         .eq(ChatSession::getArchived, archived ? 1 : 0)
-                        .orderByDesc(ChatSession::getUpdateTime));
+                        .orderByDesc(ChatSession::getUpdateTime)
+                        .last("LIMIT 200"));
     }
 
     /**
@@ -330,7 +331,8 @@ public class AgentService {
                 new LambdaQueryWrapper<ChatMessage>()
                         .eq(ChatMessage::getSessionId, sessionId)
                         .eq(ChatMessage::getUsername, user.getUsername())
-                        .orderByAsc(ChatMessage::getId));
+                        .orderByAsc(ChatMessage::getId)
+                        .last("LIMIT 500"));
     }
 
     /**
@@ -582,7 +584,7 @@ public class AgentService {
                     if (ocrText != null && !ocrText.isBlank()) {
                         blocks.add(TextBlock.builder()
                                 .text("[用户上传了图片：" + fileName + "，OCR 识别结果如下]\n" + ocrText).build());
-                        log.info("图片 OCR 预处理成功: user={}, file={}", user.getUsername(), fileName);
+                        log.debug("图片 OCR 预处理成功: user={}, file={}", user.getUsername(), fileName);
                     } else {
                         // OCR 未返回有效文字（可能未配置凭证或识别失败），降级为文件路径说明
                         blocks.add(TextBlock.builder()
@@ -596,7 +598,7 @@ public class AgentService {
                 if (parsedText != null && !parsedText.startsWith("错误") && !parsedText.startsWith("文档解析失败")) {
                     blocks.add(TextBlock.builder()
                             .text("[用户上传了文件：" + fileName + "，文档解析结果如下]\n" + parsedText).build());
-                    log.info("文档解析成功: user={}, file={}", user.getUsername(), fileName);
+                    log.debug("文档解析成功: user={}, file={}", user.getUsername(), fileName);
                 } else {
                     // 解析失败（扫描件/超大文件等），降级为文件路径说明
                     blocks.add(TextBlock.builder()
@@ -707,35 +709,38 @@ public class AgentService {
     }
 
     /**
-     * Token 自动追踪：从 ModelCallEndEvent 提取 ChatUsage，记录到 token_usage_log 表。
+     * Token 自动追踪（异步）：从 ModelCallEndEvent 提取 ChatUsage，异步写入 token_usage_log 表。
      * <p>
      * provider/modelName 由调用方从回合级缓存传入，避免每次模型调用都查库+解密 API Key。
-     * 失败仅告警不抛出，避免影响对话主流程。
+     * DB 写入在 boundedElastic 线程池异步执行，不阻塞 SSE 事件流；失败仅告警不抛出。
      */
     private void recordTokenUsage(LoginUser user, String sessionId, ModelCallEndEvent event,
                                   String providerName, String modelName) {
-        try {
-            ChatUsage usage = event.getUsage();
-            if (usage == null || usage.getTotalTokens() <= 0) {
-                return;
-            }
-            tokenUsageService.recordUsage(
-                    user.getUserId(),
-                    user.getTenantId(),
-                    user.getUsername(),
-                    sessionId,
-                    providerName,
-                    modelName,
-                    usage.getInputTokens(),
-                    usage.getOutputTokens(),
-                    event.getReplyId(),
-                    null
-            );
-            log.debug("Token 已记录: user={}, input={}, output={}, total={}",
-                    user.getUsername(), usage.getInputTokens(), usage.getOutputTokens(), usage.getTotalTokens());
-        } catch (Exception e) {
-            log.warn("Token 追踪记录失败（不影响对话）: user={}, error={}", user.getUsername(), e.getMessage());
+        ChatUsage usage = event.getUsage();
+        if (usage == null || usage.getTotalTokens() <= 0) {
+            return;
         }
+        // 异步写入 DB：避免阻塞 SSE 事件流（每次模型调用节省 2-5ms 同步阻塞）
+        Mono.fromRunnable(() -> {
+            try {
+                tokenUsageService.recordUsage(
+                        user.getUserId(),
+                        user.getTenantId(),
+                        user.getUsername(),
+                        sessionId,
+                        providerName,
+                        modelName,
+                        usage.getInputTokens(),
+                        usage.getOutputTokens(),
+                        event.getReplyId(),
+                        null
+                );
+                log.debug("Token 已记录: user={}, input={}, output={}, total={}",
+                        user.getUsername(), usage.getInputTokens(), usage.getOutputTokens(), usage.getTotalTokens());
+            } catch (Exception e) {
+                log.warn("Token 追踪记录失败（不影响对话）: user={}, error={}", user.getUsername(), e.getMessage());
+            }
+        }).subscribeOn(Schedulers.boundedElastic()).subscribe();
     }
 
     /**

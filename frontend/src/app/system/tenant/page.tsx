@@ -87,7 +87,7 @@ function TenantAdminPage() {
         const hasAdmin = (editing.adminUsername?.trim() ?? "") !== "";
         if (hasAdmin) {
           // 调用新 API：创建租户并创建管理员
-          await api.post("/api/adminTenant/with-admin", editing);
+          await api.post("/api/adminTenant/withAdmin", editing);
         } else {
           // 传统方式：仅创建租户
           await api.post("/api/adminTenant", editing);

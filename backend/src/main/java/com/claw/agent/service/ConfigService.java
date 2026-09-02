@@ -568,7 +568,7 @@ public class ConfigService {
     /** 发布配置变更事件，触发受影响用户的 Agent 热重建（携带归属人供 USER 级精准失效） */
     private void publishChanged(String scope, Long tenantId, String ownerId) {
         eventPublisher.publishEvent(new ConfigChangedEvent(this, scope, tenantId, ownerId));
-        log.info("配置已更新并发布变更事件: scope={}, tenantId={}, owner={}", scope, tenantId, ownerId);
+        log.debug("配置已更新并发布变更事件: scope={}, tenantId={}, owner={}", scope, tenantId, ownerId);
     }
 
     /**

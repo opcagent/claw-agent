@@ -162,10 +162,10 @@ function ConfigPage() {
       const [p, c, t, m, ts, sc] = await Promise.all([
         api.get<ModelProviderConfig[]>(`/api/config/providers?scope=${scope}`),
         api.get<AgentConfigItem[]>(`/api/config/params?scope=${scope}`),
-        api.get<ToolConfig[]>(`/api/capability/tool-configs?scope=${scope}`),
+        api.get<ToolConfig[]>(`/api/capability/toolConfigs?scope=${scope}`),
         api.get<McpServer[]>(`/api/capability/mcp?scope=${scope}`),
         api.get<ToolSetWithDetails[]>("/api/tools/details"),  // ← 工具集是全局的,不传 scope
-        api.get<AgentConfigItem[]>(`/api/config/search-configs?scope=${scope}`),
+        api.get<AgentConfigItem[]>(`/api/config/searchConfigs?scope=${scope}`),
       ]);
       setProviders(p.data || []);
       setParams(c.data || []);
@@ -195,11 +195,11 @@ function ConfigPage() {
   // 参数目录、模型目录字典与系统配置不随作用域变化，只拉一次；失败静默（非关键路径）
   useEffect(() => {
     api
-      .get<ParamKeyInfo[]>("/api/config/param-keys")
+      .get<ParamKeyInfo[]>("/api/config/paramKeys")
       .then((res) => setParamKeys(res.data || []))
       .catch(() => {});
     api
-      .get<SystemProps>("/api/config/system-props")
+      .get<SystemProps>("/api/config/systemProps")
       .then((res) => setSystemProps(res.data || null))
       .catch(() => {});
     api
@@ -207,7 +207,7 @@ function ConfigPage() {
       .then((res) => setProviderModels(res.data || []))
       .catch(() => {});
     api
-      .get<ToolKeyInfo[]>("/api/capability/tool-keys")
+      .get<ToolKeyInfo[]>("/api/capability/toolKeys")
       .then((res) => setToolKeys(res.data || []))
       .catch(() => {});
   }, []);  // ← 只在组件挂载时加载一次,不随 scope 变化
@@ -323,7 +323,7 @@ function ConfigPage() {
     }
     setSavingSearch(true);
     try {
-      await api.post("/api/config/search-configs", { scope, configKey, configValue: value });
+      await api.post("/api/config/searchConfigs", { scope, configKey, configValue: value });
       toast.success("已保存");
       setEditSearchKey("");
       setEditSearchValue("");
@@ -345,7 +345,7 @@ function ConfigPage() {
 
   async function toggleTool(key: string, enabled: boolean) {
     try {
-      await api.post("/api/capability/tool-config", { scope, toolKey: key, enabled });
+      await api.post("/api/capability/toolConfig", { scope, toolKey: key, enabled });
       toast.success("已保存，相关用户的 Agent 将热重建");
       load();
     } catch (e) {
@@ -447,7 +447,7 @@ function ConfigPage() {
 
   async function toggleSkill(name: string, enabled: boolean) {
     try {
-      await api.post("/api/capability/skill-toggle", {
+      await api.post("/api/capability/skillToggle", {
         username: skillUser || undefined,
         skillName: name,
         enabled,

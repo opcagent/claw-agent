@@ -120,7 +120,7 @@ function ChannelPage() {
   async function syncMembers(ch: UserChannel) {
     if (!ch.id) return;
     try {
-      await api.post(`/api/channel/${ch.id}/sync-members`, {});
+      await api.post(`/api/channel/${ch.id}/syncMembers`, {});
       toast.success("群组成员同步请求已发送");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "同步失败");

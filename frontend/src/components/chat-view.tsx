@@ -7,7 +7,7 @@
  * - tool_start/tool_end/subagent/error 渲染为过程行；
  * - confirm_request 渲染审批卡片，允许/拒绝走 /api/chat/confirm 恢复执行。
  */
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { AlertTriangle, Archive, ArchiveRestore, Bot, Check, ChevronDown, ChevronUp, Clipboard, Copy, Download, FileText, LayoutGrid, Loader2, Paperclip, Pencil, Plus, Send, Slash, Table, Trash2, User, X, ZoomIn } from "lucide-react";
@@ -323,6 +323,30 @@ export default function ChatView() {
   const sessionIdRef = useRef<string | null>(null);
   sessionIdRef.current = currentSessionId;
 
+  // SSE 文本增量 rAF 批处理：高频 text 事件累积到 ref，每帧统一 flush 到 state，
+  // 避免每秒 10-30 次 setState 导致的过度 React reconciliation
+  const rafIdRef = useRef<number>(0);
+  const pendingTextRef = useRef("");
+  const currentTargetIdRef = useRef<string>("");
+
+  /** 将缓冲区的文本增量在下一帧统一写入 blocks state */
+  const flushPendingText = useCallback(() => {
+    const text = pendingTextRef.current;
+    const blockId = currentTargetIdRef.current;
+    if (!text || !blockId) return;
+    pendingTextRef.current = "";
+    setBlocks((prev) =>
+      prev.map((b) => {
+        if (b.id !== blockId || b.kind !== "assistant") return b;
+        return {
+          ...b,
+          thinking: false,
+          text: (b.thinking ? "" : b.text) + text,
+        };
+      })
+    );
+  }, []);
+
   // Textarea 自动调整高度（最多 8 行）
   useEffect(() => {
     const ta = textareaRef.current;
@@ -403,13 +427,15 @@ export default function ChatView() {
         if (event.sessionId) setCurrentSessionId(event.sessionId);
         break;
       case "text":
-        updateAssistant(targetBlockId, (b) => {
-          if (b.thinking) {
-            b.thinking = false;
-            b.text = "";
-          }
-          b.text += event.delta || "";
-        });
+        // rAF 批处理：增量累积到 ref，每帧统一 flush，避免高频 setState
+        currentTargetIdRef.current = targetBlockId;
+        pendingTextRef.current += event.delta || "";
+        if (!rafIdRef.current) {
+          rafIdRef.current = requestAnimationFrame(() => {
+            rafIdRef.current = 0;
+            flushPendingText();
+          });
+        }
         break;
       case "tool_start":
         // 记录工具调用开始（不创建独立区块，只在助手气泡内展示）
@@ -717,15 +743,15 @@ export default function ChatView() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
-  /** 复制文本到剪贴板 */
-  async function copyToClipboard(text: string, label: string = "内容") {
+  /** 复制文本到剪贴板（useCallback 稳定引用，避免子组件不必要的重渲染） */
+  const copyToClipboard = useCallback(async (text: string, label: string = "内容") => {
     try {
       await navigator.clipboard.writeText(text);
       toast.success(`${label}已复制到剪贴板`);
     } catch (e) {
       toast.error("复制失败");
     }
-  }
+  }, []);
 
 
   /* ---------------- 渲染 ---------------- */
@@ -1248,7 +1274,8 @@ export default function ChatView() {
 
 /* ---------------- 区块渲染 ---------------- */
 
-function BlockView({
+/** BlockView 使用 React.memo 包裹，SSE 流式更新时只重渲染正在接收文本的 Block */
+const BlockView = React.memo(function BlockView({
   block,
   onConfirm,
   copyToClipboard,
@@ -1476,4 +1503,4 @@ function BlockView({
       )}
     </div>
   );
-}
+});

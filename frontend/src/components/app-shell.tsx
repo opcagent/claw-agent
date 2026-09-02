@@ -108,7 +108,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       })
       .catch(() => {});
     api
-      .get<VersionInfo>("/api/config/version-info")
+      .get<VersionInfo>("/api/config/versionInfo")
       .then((res) => setVersionInfo(res.data || null))
       .catch(() => {});
     setReadVersion(window.localStorage.getItem(NOTICE_READ_KEY));

@@ -2,7 +2,7 @@
 
 /**
  * 个人信息详情抽屉：本人基础资料 + 最近一次成功登录 + 最近登录记录列表。
- * 数据全部来自服务端（/api/auth/profile 与 /api/auth/login-logs），
+ * 数据全部来自服务端（/api/auth/profile 与 /api/auth/loginLogs），
  * 查询对象由 JWT 定位，只能看到自己的信息；昵称/联系方式支持本人自助编辑。
  */
 import { useEffect, useState } from "react";
@@ -57,7 +57,7 @@ export default function ProfileSheet({
     setLoading(true);
     Promise.all([
       api.get<ProfileInfo>("/api/auth/profile"),
-      api.get<LoginLog[]>("/api/auth/login-logs?limit=10"),
+      api.get<LoginLog[]>("/api/auth/loginLogs?limit=10"),
     ])
       .then(([p, l]) => {
         setProfile(p.data || null);

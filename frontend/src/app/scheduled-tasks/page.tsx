@@ -141,7 +141,7 @@ function ScheduledTasksPage() {
   async function runNow(task: ScheduledTask) {
     setRunning(task.id!);
     try {
-      const res = await api.post<string>(`/api/schedule/${task.id}/run-now`);
+      const res = await api.post<string>(`/api/schedule/${task.id}/runNow`);
       toast.success("执行完成", { description: (res.data || "").substring(0, 100) });
       load();
     } catch (e) {
