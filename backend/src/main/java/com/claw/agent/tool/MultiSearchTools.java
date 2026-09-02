@@ -142,6 +142,12 @@ public class MultiSearchTools {
                     log.info("搜索引擎 {} 成功: query={}", engine, query);
                     return result;
                 }
+            } catch (InterruptedException e) {
+                // ExecutionConfig 超时 interrupt 工作线程 → HTTP 请求被中断，属预期行为
+                Thread.currentThread().interrupt(); // 恢复中断标志
+                String msg = engine + ": 请求超时被中断";
+                errors.add(msg);
+                log.warn("搜索引擎 {} 超时中断: query={}", engine, query);
             } catch (Exception e) {
                 String msg = engine + ": " + e.getMessage();
                 errors.add(msg);
