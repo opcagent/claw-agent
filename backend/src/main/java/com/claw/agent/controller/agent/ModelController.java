@@ -143,10 +143,12 @@ public class ModelController {
                 );
             case "volcengine":
                 return List.of(
-                        new ModelCardDto("doubao-pro", "豆包-pro", 32768),
-                        new ModelCardDto("doubao-lite", "豆包-lite", 32768),
-                        new ModelCardDto("doubao-32k", "豆包-32K", 32768),
-                        new ModelCardDto("doubao-128k", "豆包-128K", 128000),
+                        new ModelCardDto("glm-5-2-260617", "GLM-5.2", 1000000),
+                        new ModelCardDto("doubao-seed-2-1-pro-260628", "豆包-Seed 2.1 Pro", 128000),
+                        new ModelCardDto("doubao-seed-2-1-lite-260628", "豆包-Seed 2.1 Lite", 128000),
+                        new ModelCardDto("doubao-pro-128k", "豆包-Pro 128K", 128000),
+                        new ModelCardDto("doubao-pro-32k", "豆包-Pro 32K", 32768),
+                        new ModelCardDto("doubao-lite-32k", "豆包-Lite 32K", 32768),
                         new ModelCardDto("ernie-bot-45", "文心一言-4.5", 8192),
                         new ModelCardDto("ernie-bot-8k", "文心一言-8K", 8192),
                         new ModelCardDto("glm-4-air", "智谱AI-Glm4-Air", 8192),
