@@ -6,8 +6,12 @@ import com.claw.agent.model.ModelProviderConfig;
 import io.agentscope.core.model.ExecutionConfig;
 import io.agentscope.core.model.GenerateOptions;
 import io.agentscope.core.model.Model;
+import io.agentscope.extensions.model.anthropic.AnthropicChatModel;
+import io.agentscope.extensions.model.anthropic.formatter.AnthropicChatFormatter;
 import io.agentscope.extensions.model.dashscope.DashScopeChatModel;
 import io.agentscope.extensions.model.dashscope.formatter.DashScopeChatFormatter;
+import io.agentscope.extensions.model.gemini.GeminiChatModel;
+import io.agentscope.extensions.model.gemini.formatter.GeminiChatFormatter;
 import io.agentscope.extensions.model.ollama.OllamaChatModel;
 import io.agentscope.extensions.model.ollama.formatter.OllamaChatFormatter;
 import io.agentscope.extensions.model.ollama.options.OllamaOptions;
@@ -26,13 +30,15 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * 模型工厂：按数据库配置（model_provider_config，三级作用域解析后的结果）构建 Chat Model。
  * <p>
- * 支持五种提供商：
+ * 支持七种提供商：
  * <ul>
  *   <li>dashscope  —— 阿里云通义千问（默认）</li>
  *   <li>deepseek   —— DeepSeek 官方（OpenAI 兼容协议，默认指向平台端点）</li>
  *   <li>volcengine —— 火山方舟/豆包（OpenAI 兼容协议，默认指向 ark.cn-beijing.volces.com）</li>
  *   <li>openai     —— OpenAI 及任意 OpenAI 兼容端点（Kimi / vLLM 等，通过 base-url 指向）</li>
  *   <li>ollama     —— 本地 Ollama</li>
+ *   <li>anthropic  —— Anthropic Claude（Claude 3.5/3.7/4 系列）</li>
+ *   <li>gemini     —— Google Gemini（Gemini 2.0/2.5 系列）</li>
  * </ul>
  * 阿里规约：模型构建逻辑集中收敛到工厂类，禁止在业务代码中散落构建。
  */
@@ -47,6 +53,8 @@ public class ModelFactory {
     private static final String PROVIDER_VOLCENGINE = "volcengine";
     private static final String PROVIDER_OPENAI = "openai";
     private static final String PROVIDER_OLLAMA = "ollama";
+    private static final String PROVIDER_ANTHROPIC = "anthropic";
+    private static final String PROVIDER_GEMINI = "gemini";
 
     /** Ollama 默认端点 */
     private static final String DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
@@ -54,12 +62,19 @@ public class ModelFactory {
     private static final String DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
     /** 火山方舟（豆包）通用模型 OpenAI 兼容端点 */
     private static final String DEFAULT_VOLCENGINE_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
+    /** Anthropic Claude 默认端点 */
+    private static final String DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com";
+    /** Google Gemini 默认端点 */
+    private static final String DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
+
     /** 各提供商默认模型名 */
     private static final String DEFAULT_DASHSCOPE_MODEL = "qwen-plus";
     private static final String DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
     private static final String DEFAULT_VOLCENGINE_MODEL = "doubao-seed-2-1-pro-260628";
     private static final String DEFAULT_OPENAI_MODEL = "gpt-4.1-mini";
     private static final String DEFAULT_OLLAMA_MODEL = "qwen2.5:7b";
+    private static final String DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-20250514";
+    private static final String DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
 
     /**
      * 模型容错配置：最大重试 3 次，指数退避（1s → 2s → 4s），超时 120s。
@@ -111,6 +126,8 @@ public class ModelFactory {
             case PROVIDER_VOLCENGINE -> buildVolcengine(cfg);
             case PROVIDER_OPENAI -> buildOpenAi(cfg);
             case PROVIDER_OLLAMA -> buildOllama(cfg);
+            case PROVIDER_ANTHROPIC -> buildAnthropic(cfg);
+            case PROVIDER_GEMINI -> buildGemini(cfg);
             default -> buildDashScope(cfg);
         };
     }
@@ -129,6 +146,8 @@ public class ModelFactory {
             case PROVIDER_VOLCENGINE -> DEFAULT_VOLCENGINE_MODEL;
             case PROVIDER_OPENAI -> DEFAULT_OPENAI_MODEL;
             case PROVIDER_OLLAMA -> DEFAULT_OLLAMA_MODEL;
+            case PROVIDER_ANTHROPIC -> DEFAULT_ANTHROPIC_MODEL;
+            case PROVIDER_GEMINI -> DEFAULT_GEMINI_MODEL;
             default -> DEFAULT_DASHSCOPE_MODEL;
         });
         String baseUrl = cfg.getBaseUrl() == null ? "" : cfg.getBaseUrl();
@@ -216,6 +235,45 @@ public class ModelFactory {
                 .formatter(new OllamaChatFormatter())
                 .defaultOptions(ollamaOptions)
                 .build();
+    }
+
+    /**
+     * 构建 Anthropic Claude 模型。
+     * <p>
+     * 支持 Claude 3.5/3.7/4 系列，默认 claude-sonnet-4-20250514。
+     * API Key 环境变量：ANTHROPIC_API_KEY
+     */
+    private Model buildAnthropic(ModelProviderConfig cfg) {
+        requireApiKey(cfg.getApiKey(), PROVIDER_ANTHROPIC, "ANTHROPIC_API_KEY");
+        AnthropicChatModel.Builder builder = AnthropicChatModel.builder()
+                .apiKey(cfg.getApiKey())
+                .modelName(fallback(cfg.getModelName(), DEFAULT_ANTHROPIC_MODEL))
+                .stream(true)
+                .formatter(new AnthropicChatFormatter())
+                .defaultOptions(MODEL_GENERATE_OPTIONS);
+        if (StringUtils.hasText(cfg.getBaseUrl())) {
+            builder.baseUrl(cfg.getBaseUrl());
+        }
+        return builder.build();
+    }
+
+    /**
+     * 构建 Google Gemini 模型。
+     * <p>
+     * 支持 Gemini 2.0/2.5 系列，默认 gemini-2.0-flash。
+     * API Key 环境变量：GEMINI_API_KEY
+     */
+    private Model buildGemini(ModelProviderConfig cfg) {
+        requireApiKey(cfg.getApiKey(), PROVIDER_GEMINI, "GEMINI_API_KEY");
+        GeminiChatModel.Builder builder = GeminiChatModel.builder()
+                .apiKey(cfg.getApiKey())
+                .modelName(fallback(cfg.getModelName(), DEFAULT_GEMINI_MODEL))
+                .formatter(new GeminiChatFormatter())
+                .defaultOptions(MODEL_GENERATE_OPTIONS);
+        if (StringUtils.hasText(cfg.getBaseUrl())) {
+            builder.baseUrl(cfg.getBaseUrl());
+        }
+        return builder.build();
     }
 
     /** API key 缺失时快速失败，给出可操作的提示 */

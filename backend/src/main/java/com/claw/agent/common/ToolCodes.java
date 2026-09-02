@@ -37,4 +37,6 @@ public final class ToolCodes {
     public static final String OCR = "ocr";
     /** 文档解析（Apache Tika：PDF/DOCX/XLSX/PPTX 等格式文本提取，Spring Bean 注册） */
     public static final String DOCUMENT_PARSE = "document_parse";
+    /** 浏览器自动化（网页浏览、标题获取、链接提取，AgentRegistry 手动注册） */
+    public static final String BROWSER = "browser";
 }

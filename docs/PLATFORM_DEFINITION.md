@@ -1,7 +1,7 @@
 # Claw Agent 平台定义文档
 
-> **版本**: 2.1  
-> **更新日期**: 2026-09-01  
+> **版本**: 2.2  
+> **更新日期**: 2026-09-02  
 > **状态**: 生产就绪  
 > **技术栈**: Spring Boot 3.5 + AgentScope Java 2.0 + Next.js 16 + MySQL 8 + Redis
 
@@ -28,7 +28,9 @@ Claw Agent 是一个**企业级多租户 AI Agent 平台**,部署在用户自有
 ### 1.1 核心价值
 
 - ✅ **多租户隔离**: 租户 → 部门 → 用户三级组织架构,数据完全隔离
-- ✅ **满血 AgentScope**: 工作区人格、分层记忆、上下文压缩、技能自学习、子 Agent、Plan Mode
+- ✅ **满血 AgentScope**: 工作区人格、分层记忆、上下文压缩、技能自学习、子 Agent、Plan Mode、Middleware 链
+- ✅ **思考过程展示**: 支持展示模型推理过程（如 Claude extended thinking），前端可折叠查看
+- ✅ **安全护栏**: Prompt Injection 防护 + 输出脱敏，GuardrailsMiddleware 保障安全
 - ✅ **动态工具系统**: 注解扫描自动注册,运行时启用/禁用,细粒度权限控制
 - ✅ **HITL 人工确认**: 敏感操作执行前弹窗审批,安全可控
 - ✅ **Token 统计追踪**: 自动记录模型调用消耗,月度汇总,管理员视图
@@ -59,7 +61,15 @@ Claw Agent 是一个**企业级多租户 AI Agent 平台**,部署在用户自有
 | **技能自学习** | Agent 可起草新技能(`propose_skill`),后台 curator 定期整理 | `SkillCuratorConfig` |
 | **子 Agent 委派** | 复杂任务拆解为子任务,委派给 specialized subagents | `subagents/` 目录 |
 | **Plan Mode** | 只读规划模式,输出执行计划后等待 HITL 审批退出 | 对话参数 |
-| **Middleware 拦截** | 自定义中间件拦截模型调用、工具执行等事件 | `AgentTraceMiddleware` |
+| **Middleware 拦截** | 自定义中间件拦截模型调用、工具执行等事件 | `GuardrailsMiddleware` / `AgentTraceMiddleware` / `PerformanceMiddleware` |
+
+**Middleware 链执行顺序**:
+```
+GuardrailsMiddleware (输入过滤 + 输出脱敏)
+  → AgentTraceMiddleware (执行链路追踪)
+    → PerformanceMiddleware (性能监控)
+      → HarnessAgent 内置 Middleware
+```
 
 ### 2.2 工具生态系统
 
@@ -70,6 +80,7 @@ Claw Agent 是一个**企业级多租户 AI Agent 平台**,部署在用户自有
 | **utility** | `system_tools` | 时间查询、日期计算、UUID 生成、系统信息 |
 | **utility** | `math_tools` | 数学计算、哈希函数、Base64 编解码、密码生成 |
 | **search** | `multi_search` | Tavily/Brave/Bing/SearXNG/DuckDuckGo 多级降级搜索 |
+| **search** | `browser` | 浏览器自动化：网页浏览、标题获取、链接提取 |
 | **data** | `note_tools` | 工作区文件读写、笔记管理、知识库维护 |
 
 #### MCP 服务器 (平台级共享)
@@ -98,6 +109,12 @@ Claw Agent 是一个**企业级多租户 AI Agent 平台**,部署在用户自有
 - ✅ **HITL 人工确认**: 敏感工具执行前弹窗审批,支持允许/拒绝
 - ✅ **审计日志**: 所有管理操作自动记录 `sys_oper_log`,含 IP/traceId
 - ✅ **登录防护**: 失败计数限流,成功清零,防止暴力破解
+- ✅ **安全护栏**: `GuardrailsMiddleware` 拦截 Prompt Injection 攻击，输出自动脱敏
+
+**安全护栏功能**:
+- **输入过滤**: 检测 10 种 Prompt Injection 模式（中英文），命中时拦截并返回警告
+- **输出脱敏**: 自动检测并替换文件路径、内网 IP、API Key 等敏感信息
+- **Middleware 链**: 作为第一个 Middleware 执行，确保所有输入输出都经过检查
 
 ---
 

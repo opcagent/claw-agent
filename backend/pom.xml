@@ -29,6 +29,10 @@
         <jjwt.version>0.12.6</jjwt.version>
         <!-- OpenAPI 文档（springdoc + Knife4j UI） -->
         <springdoc.version>2.8.6</springdoc.version>
+        <!-- Apache Commons IO 版本 -->
+        <commons-io.version>2.15.1</commons-io.version>
+        <!-- Apache Tika 版本 -->
+        <tika.version>3.0.0</tika.version>
     </properties>
 
     <dependencies>
@@ -57,6 +61,18 @@
         <dependency>
             <groupId>io.agentscope</groupId>
             <artifactId>agentscope-extensions-model-ollama</artifactId>
+            <version>${agentscope.version}</version>
+        </dependency>
+        <!-- 模型提供商扩展：Anthropic Claude -->
+        <dependency>
+            <groupId>io.agentscope</groupId>
+            <artifactId>agentscope-extensions-model-anthropic</artifactId>
+            <version>${agentscope.version}</version>
+        </dependency>
+        <!-- 模型提供商扩展：Google Gemini -->
+        <dependency>
+            <groupId>io.agentscope</groupId>
+            <artifactId>agentscope-extensions-model-gemini</artifactId>
             <version>${agentscope.version}</version>
         </dependency>
 
@@ -90,6 +106,7 @@
             <artifactId>mybatis-plus-jsqlparser</artifactId>
             <version>${mybatis-plus.version}</version>
         </dependency>
+        
         <!-- MySQL 驱动 -->
         <dependency>
             <groupId>com.mysql</groupId>
@@ -126,18 +143,18 @@
         <dependency>
             <groupId>org.apache.tika</groupId>
             <artifactId>tika-core</artifactId>
-            <version>2.9.2</version>
+            <version>${tika.version}</version>
         </dependency>
         <dependency>
             <groupId>org.apache.tika</groupId>
             <artifactId>tika-parsers-standard-package</artifactId>
-            <version>2.9.2</version>
+            <version>${tika.version}</version>
         </dependency>
-        <!-- commons-io：Tika 2.9.2 运行时依赖（ChecksumInputStream 等），Spring Boot 传递版本过低需显式指定 -->
+        <!-- commons-io：Tika 运行时依赖（ChecksumInputStream 等），Spring Boot 传递版本过低需显式指定 -->
         <dependency>
             <groupId>commons-io</groupId>
             <artifactId>commons-io</artifactId>
-            <version>2.16.1</version>
+            <version>${commons-io.version}</version>
         </dependency>
 
         <!-- ==================== API 文档（开发阶段启用） ==================== -->

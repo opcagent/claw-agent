@@ -53,7 +53,7 @@ function buildHeaders(withAuth: boolean): HeadersInit {
   return headers;
 }
 
-/** 401 统一处理：清 token 跳登录页（已在登录页则不重复跳转，避免刷新循环） */
+/** 401 统一处理：清 token 跳登录页（已在登录页则不重复跳，避免刷新循环） */
 function handleUnauthorized(): never {
   localStorage.removeItem(TOKEN_KEY);
   if (typeof window !== "undefined" && window.location.pathname !== "/login") {
@@ -89,11 +89,18 @@ async function request<T>(
  * @param url     接口地址（POST）
  * @param body    请求体对象
  * @param onEvent 回调 (event)，event.type 区分事件种类
+ * @param signal  可选 AbortSignal，用于组件卸载时取消请求
+ */
+/**
+ * SSE 流式请求：逐块读取并解析事件，调用 onEvent 回调。
+ * <p>
+ * 收到 end 事件时主动关闭连接，避免后端 Flux 未完成导致 reader 永久挂起。
  */
 export async function stream(
   url: string,
   body: unknown,
-  onEvent: (event: ChatEvent) => void
+  onEvent: (event: ChatEvent) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   // SSE 直连后端，绕过 Next.js rewrites 代理缓冲（http-proxy 默认缓冲 chunked 响应）
   const directUrl = BACKEND_URL ? `${BACKEND_URL}${url}` : url;
@@ -101,6 +108,7 @@ export async function stream(
     method: "POST",
     headers: buildHeaders(true),
     body: JSON.stringify(body),
+    signal,
   });
   if (resp.status === 401) handleUnauthorized();
   // 后端准备段异常会经全局异常处理器返回 JSON Result（非 SSE），
@@ -126,23 +134,75 @@ export async function stream(
   const reader = resp.body.getReader();
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
-  // SSE 事件块以空行分隔；逐块读取防半包
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let idx: number;
-    while ((idx = buffer.indexOf("\n\n")) !== -1) {
-      const block = buffer.slice(0, idx);
-      buffer = buffer.slice(idx + 2);
-      parseBlock(block, onEvent);
-    }
+  /**
+   * 流超时保护（内容感知）：
+   * - 未收到文本前 15s 无事件 → 后端卡死，断开
+   * - 收到文本后 3s 无事件 → 用户已看到回复，Agent 后续处理（工具调用等）已完成，主动断开
+   * - 硬超时 120s → 无论任何情况，强制断开
+   */
+  const IDLE_TIMEOUT_WAITING = 15_000;   // 等待回复阶段
+  const IDLE_TIMEOUT_AFTER_TEXT = 3_000;  // 已收到回复，短暂等待后续处理完成
+  const MAX_STREAM_DURATION = 120_000;
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  let hardTimer: ReturnType<typeof setTimeout> | null = null;
+  let textReceived = false;
+
+  function resetIdleTimer() {
+    if (idleTimer) clearTimeout(idleTimer);
+    const timeout = textReceived ? IDLE_TIMEOUT_AFTER_TEXT : IDLE_TIMEOUT_WAITING;
+    idleTimer = setTimeout(() => {
+      reader.cancel().catch(() => {});
+    }, timeout);
   }
-  if (buffer.trim()) parseBlock(buffer, onEvent);
+  resetIdleTimer();
+  hardTimer = setTimeout(() => {
+    reader.cancel().catch(() => {});
+  }, MAX_STREAM_DURATION);
+
+  // 外部 abort（用户点「取消」/切换会话）时显式 cancel reader，
+  // 确保 pending 的 reader.read() 立即返回 {done:true}（fetch abort 不一定能立即中断 reader）
+  const onAbort = () => { reader.cancel().catch(() => {}); };
+  signal?.addEventListener("abort", onAbort, { once: true });
+
+  try {
+    // SSE 事件块以空行分隔；逐块读取防半包
+    for (;;) {
+      resetIdleTimer();
+      // abort 信号检查：用户点「取消」或切换会话时立即退出，不等 reader 自然结束
+      if (signal?.aborted) break;
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx: number;
+      while ((idx = buffer.indexOf("\n\n")) !== -1) {
+        const block = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        const event = parseBlock(block);
+        if (event) {
+          onEvent(event);
+          // 收到文本事件后切换为短超时（用户已看到回复，后续工具处理完成后快速断开）
+          if (event.type === "text") textReceived = true;
+        }
+        // 收到 end 事件：立即关闭连接，不等后端 Flux 完成
+        if (event?.type === "end") {
+          await reader.cancel().catch(() => {});
+        }
+      }
+    }
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+    if (idleTimer) clearTimeout(idleTimer);
+    if (hardTimer) clearTimeout(hardTimer);
+    reader.releaseLock();
+  }
+  if (buffer.trim()) {
+    const event = parseBlock(buffer);
+    if (event) onEvent(event);
+  }
 }
 
 /** 解析单个 SSE 事件块（event: xxx / data: {...}） */
-function parseBlock(block: string, onEvent: (event: ChatEvent) => void): void {
+function parseBlock(block: string): ChatEvent | null {
   let type = "message";
   const dataLines: string[] = [];
   block.split("\n").forEach((line) => {
@@ -152,15 +212,15 @@ function parseBlock(block: string, onEvent: (event: ChatEvent) => void): void {
       dataLines.push(line.slice(5).trim());
     }
   });
-  if (!dataLines.length) return;
+  if (!dataLines.length) return null;
   try {
     const data = JSON.parse(dataLines.join("\n")) as ChatEvent;
     // event: 行为准，data 内无 type 时回填
     if (!data.type) data.type = type;
-    onEvent(data);
+    return data;
   } catch {
-    // 非法 JSON：以原始文本作为 error 事件透传
-    onEvent({ type: "error", message: dataLines.join("\n") });
+    // 非法 JSON：以 error 事件透传
+    return { type: "error", message: dataLines.join("\n") };
   }
 }
 
@@ -173,7 +233,9 @@ export async function upload(file: File): Promise<UploadResponse> {
   if (token) headers["Authorization"] = "Bearer " + token;
   const resp = await fetch("/api/upload", { method: "POST", headers, body: form });
   if (resp.status === 401) handleUnauthorized();
-  const json = (await resp.json()) as Result<UploadResponse>;
+  const json = (await resp.json().catch(() => {
+    throw new ApiError(`上传响应解析失败（HTTP ${resp.status}）`);
+  })) as Result<UploadResponse>;
   if (json.code !== 200) throw new ApiError(json.message || "上传失败", json.code);
   return json.data;
 }
@@ -187,3 +249,27 @@ export const api = {
   stream,
   upload,
 };
+
+// 模型相关接口类型定义
+export interface ModelCard {
+  modelName: string;
+  displayName: string;
+  contextSize: number;
+}
+
+export interface ListModelResponse {
+  models: ModelCard[];
+  provider: string;
+}
+
+// 模型相关API
+export const modelApi = {
+  /**
+   * 获取指定提供商支持的模型列表
+   * @param provider 模型提供商
+   */
+  listModels: (provider: string): Promise<Result<ListModelResponse>> => {
+    return api.get<ListModelResponse>(`/api/models/list?provider=${encodeURIComponent(provider)}`);
+  },
+};
+

@@ -29,6 +29,9 @@ import io.agentscope.core.event.ModelCallEndEvent;
 import io.agentscope.core.event.RequireUserConfirmEvent;
 import io.agentscope.core.event.SubagentExposedEvent;
 import io.agentscope.core.event.TextBlockDeltaEvent;
+import io.agentscope.core.event.ThinkingBlockDeltaEvent;
+import io.agentscope.core.event.ThinkingBlockEndEvent;
+import io.agentscope.core.event.ThinkingBlockStartEvent;
 import io.agentscope.core.event.ToolCallStartEvent;
 import io.agentscope.core.event.ToolResultEndEvent;
 import io.agentscope.core.model.ChatUsage;
@@ -198,8 +201,10 @@ public class AgentService {
                         accumulateAndFlush(user, effectiveSessionId, chatEvent, replyBuffer);
                         return chatEvent;
                     })
+                    .doOnComplete(() -> log.debug("Flux 完成：user={}, session={}", user.getUsername(), effectiveSessionId))
+                    .doFinally(signal -> log.debug("Flux 终止信号：user={}, session={}, signal={}", user.getUsername(), effectiveSessionId, signal))
                     .onErrorResume(e -> {
-                        log.error("对话执行异常: user={}, session={}", user.getUsername(), effectiveSessionId, e);
+                        log.error("对话执行异常：user={}, session={}", user.getUsername(), effectiveSessionId, e);
                         persistMessage(user, effectiveSessionId, ChatMessage.ROLE_ASSISTANT,
                                 failureContent(replyBuffer.toString(), e), null, ChatMessage.STATUS_FAIL);
                         return Flux.just(toErrorEvent(user, effectiveSessionId, e));
@@ -651,7 +656,7 @@ public class AgentService {
         return StringUtils.hasText(partial) ? partial + "\n\n" + reason : reason;
     }
 
-    /** AgentScope 事件 → 前端 SSE 事件；HITL 暂停时缓存待确认工具；模型调用结束时自动记录 Token 消耗 */
+    /** AgentScope 事件 → 前端 SSE 事件；HITL 暂停时缓存待确认工具；模型调用结束时自动记录 Token 消耗；思考过程透传 */
     private ChatEvent toChatEvent(LoginUser user, String sessionId, AgentEvent event,
                                   String providerName, String modelName) {
         ChatEvent.ChatEventBuilder builder = ChatEvent.builder().sessionId(sessionId);
@@ -659,6 +664,15 @@ public class AgentService {
             return builder.type("start").replyId(start.getReplyId()).build();
         } else if (event instanceof TextBlockDeltaEvent delta) {
             return builder.type("text").replyId(delta.getReplyId()).delta(delta.getDelta()).build();
+        } else if (event instanceof ThinkingBlockStartEvent ts) {
+            // 思考开始：前端切换思考区域
+            return builder.type("thinking_start").replyId(ts.getReplyId()).build();
+        } else if (event instanceof ThinkingBlockDeltaEvent td) {
+            // 思考增量：前端追加思考文本
+            return builder.type("thinking").replyId(td.getReplyId()).delta(td.getDelta()).build();
+        } else if (event instanceof ThinkingBlockEndEvent te) {
+            // 思考结束：前端关闭思考区域
+            return builder.type("thinking_end").replyId(te.getReplyId()).build();
         } else if (event instanceof ToolCallStartEvent tc) {
             return builder.type("tool_start").toolCallId(tc.getToolCallId())
                     .toolName(tc.getToolCallName()).build();

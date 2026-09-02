@@ -14,6 +14,7 @@ import com.claw.agent.service.ConfigService;
 import com.claw.agent.service.EmailService;
 import com.claw.agent.service.SessionSummaryService;
 import com.claw.agent.tool.*;
+import io.agentscope.core.model.ExecutionConfig;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.permission.PermissionBehavior;
 import io.agentscope.core.permission.PermissionContextState;
@@ -30,7 +31,9 @@ import io.agentscope.harness.agent.memory.MemoryConfig;
 import io.agentscope.harness.agent.memory.compaction.CompactionConfig;
 import io.agentscope.harness.agent.memory.compaction.ToolResultEvictionConfig;
 import io.agentscope.harness.agent.middleware.AgentTraceMiddleware;
+import com.claw.agent.config.agent.middleware.GuardrailsMiddleware;
 import com.claw.agent.config.agent.middleware.PerformanceMiddleware;
+import com.claw.agent.config.agent.middleware.ToolCheckMiddleware;
 import io.agentscope.harness.agent.skill.curator.SkillCuratorConfig;
 import io.agentscope.harness.agent.tool.SkillManageConfig;
 import io.agentscope.harness.agent.tools.McpServerConfig;
@@ -94,6 +97,21 @@ public class AgentRegistry {
 
     /** 权限规则来源标识 */
     private static final String RULE_SOURCE_POLICY = "clawPolicy";
+
+    /**
+     * 工具执行容错配置：最大重试 3 次，指数退避（1s → 2s → 4s），超时 30s。
+     * 覆盖工具执行中的瞬时故障（网络超时、临时性 IO 异常等）。
+     * <p>
+     * 与模型调用重试（{@link ModelFactory} 中的 MODEL_EXECUTION_CONFIG）分离，
+     * 工具执行通常更快完成，因此超时和退避上限更低。
+     */
+    private static final ExecutionConfig TOOL_EXECUTION_CONFIG = ExecutionConfig.builder()
+            .maxAttempts(3)
+            .timeout(Duration.ofSeconds(30))
+            .initialBackoff(Duration.ofSeconds(1))
+            .maxBackoff(Duration.ofSeconds(4))
+            .backoffMultiplier(2.0)
+            .build();
 
     /** 默认权限模式（数据库未配置时） */
     private static final String DEFAULT_PERMISSION_MODE = "DEFAULT";
@@ -331,6 +349,7 @@ public class AgentRegistry {
             toolkit.registerTool(new KnowledgeSearchTools(workspace.toString()));
             log.debug("已注册 KnowledgeSearchTools: user={}", userId);
         }
+
         // 5. MCP 服务器：就近解析三级作用域登记且启用的服务器，挂载其暴露的工具；
         //    单个服务器注册失败仅告警（Registrar 内部捕获），不阻断 Agent 构建
         Map<String, McpServerConfig> mcpServers = capabilityService.resolveMcpServers(tenantId, userId);
@@ -374,9 +393,15 @@ public class AgentRegistry {
                 .enablePlanMode()
                 // 权限系统：模式来自数据库配置，危险路径仍由框架内置检查强制拦截
                 .permissionContext(buildPermissionContext(permMode))
+                // 安全护栏（最先执行：拦截 Prompt Injection + 输出脱敏）
+                .middleware(new GuardrailsMiddleware())
+                // 工具输入安全检查（第二执行：拦截危险工具调用）
+                .middleware(new ToolCheckMiddleware())
                 // 执行链路追踪 + 性能监控（自定义 middleware 在 Harness 内置 middleware 之前执行）
                 .middleware(new AgentTraceMiddleware())
                 .middleware(new PerformanceMiddleware())
+                // 工具执行重试：工具调用失败时自动重试（#2829 修复：此前未配置导致工具失败不重试）
+                .toolExecutionConfig(TOOL_EXECUTION_CONFIG)
                 // 状态存储：分布式部署用 Redis，单机开发可切 json
                 .stateStore(buildStateStore(storeType))
                 // 自定义工具集（含 MCP 挂载的工具）

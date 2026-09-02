@@ -4,6 +4,3 @@ target/
 # Maven 插件生成物
 .flattened-pom.xml
 dependency-reduced-pom.xml
-
-# 本地运行期目录
-data/

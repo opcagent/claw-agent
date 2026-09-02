@@ -62,14 +62,30 @@ public interface ChannelAdapter {
     void sendGroupMessage(String groupId, String content, String accessToken);
 
     /**
-     * 拉取群组成员列表（用于同步群组成员绑定）。
+     * 拉取群组成员列表（用于同步群成员绑定）。
      *
      * @param groupId     群组 ID
      * @param accessToken 有效的 access_token
      * @return 群成员信息列表
      */
     java.util.List<GroupMember> fetchGroupMembers(String groupId, String accessToken);
-
+    
+    /**
+     * 验证 Webhook 请求签名的合法性（防伪造/防重放）。
+     * <p>
+     * 各渠道签名算法不同（如微信用 AES、Telegram 用 HMAC），由适配器内部实现具体逻辑。
+     * 验证失败应抛出异常或返回 false，由调用方决定是否拒绝请求。
+     *
+     * @param signature 请求签名（通常来自 HTTP Header 或 Query 参数）
+     * @param timestamp 时间戳（用于防重放，可为 null）
+     * @param body      请求体原始内容（用于签名计算）
+     * @return 签名合法返回 true，否则返回 false
+     */
+    default boolean verifySignature(String signature, String timestamp, Object body) {
+        // 默认实现：未配置签名验证时放行（开发/测试阶段）
+        return true;
+    }
+    
     /**
      * OAuth token 结果。
      */

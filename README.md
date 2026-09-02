@@ -24,8 +24,11 @@
 单实例服务所有用户，按 `(userId, sessionId)` 隔离会话状态；支持流式对话（SSE）、多模态消息、HITL 人工审批、动态工具系统、Token 使用统计与完整的 RBAC 权限体系。
 
 **核心特点**：
-- 🆓 **零成本启动**：内置 Ollama/Groq/HuggingFace 等免费模型提供商，无需 API Key 即可使用
+- 🆓 **零成本启动**：内置 Ollama 本地模型，无需 API Key 即可使用
+- 🤖 **多模型支持**：DashScope / DeepSeek / OpenAI / Anthropic Claude / Google Gemini / Ollama 等 7+ 提供商
 - 🔧 **动态工具注册**：`@ToolSet` 注解扫描自动注册，运行时启用/禁用，零侵入扩展
+- 🧠 **思考过程展示**：支持展示模型推理过程（如 Claude extended thinking），前端可折叠查看
+- 🛡️ **安全护栏**：Prompt Injection 防护 + 输出脱敏，GuardrailsMiddleware 保障安全
 - 📊 **Token 统计追踪**：自动记录模型调用消耗，月度汇总，管理员视图
 - 🔐 **企业级权限**：平台管理员 / 租户管理员 / 普通用户三级 RBAC，菜单级授权
 - 🌐 **MCP 协议支持**：集成 Git/GitHub/Chrome DevTools 等外部工具服务器
@@ -35,7 +38,7 @@
 | 层 | 技术 |
 |---|---|
 | **后端** | Java 17+ · Spring Boot 3.5（WebFlux 响应式 + SSE）· Spring Security（JWT 无状态） |
-| **Agent** | AgentScope Java 2.0：工作区人格、分层记忆、上下文压缩、子 Agent、Plan Mode、Middleware |
+| **Agent** | AgentScope Java 2.0：工作区人格、分层记忆、上下文压缩、子 Agent、Plan Mode、Middleware 链、思考透传、跨会话记忆 |
 | **数据** | MySQL 8.x + Flyway 迁移 · MyBatis Plus 3.5 · Redis 7.x（Agent 会话状态存储） |
 | **前端** | Next.js 16 · React 19 · TypeScript 5 · Tailwind CSS 4 · Base UI/shadcn · Zustand · Recharts |
 
@@ -48,7 +51,7 @@ claw-agent/
 ├── backend/              # Spring Boot 后端（Maven）
 │   ├── src/main/java/    # Java 源码（controller/service/mapper/config/security/tool）
 │   └── src/main/resources/
-│       ├── db/migration/ # Flyway 数据库迁移脚本（V1-V49）
+│       ├── db/migration/ # Flyway 数据库迁移脚本（V1-V50）
 │       └── mapper/       # MyBatis XML SQL
 ├── frontend/             # Next.js 前端（npm）
 │   ├── src/app/          # App Router 页面（login/chat/system/*）

@@ -1,9 +1,9 @@
 # Claw Agent 平台定位与能力清单
 
-> **版本**: 2.1  
-> **更新日期**: 2026-09-01  
+> **版本**: 2.2  
+> **更新日期**: 2026-09-02  
 > **定位**: 个人/小团队私有化部署的 AI Agent 平台  
-> **核心特点**: 单实例多租户 + AgentScope 满血版 + 动态工具系统 + 流水线编排
+> **核心特点**: 单实例多租户 + AgentScope 满血版 + 动态工具系统 + 流水线编排 + 安全护栏
 
 ---
 
@@ -79,6 +79,9 @@ PUT    /api/admin/user/{id}/roles   # 分配用户角色
 ```typescript
 type ChatEventType = 
   | 'start'           // 对话开始
+  | 'thinking_start'  // 思考过程开始（模型推理）
+  | 'thinking'        // 思考过程增量文本
+  | 'thinking_end'    // 思考过程结束
   | 'text'            // 文本增量
   | 'tool_start'      // 工具调用开始
   | 'tool_end'        // 工具调用结束
@@ -87,6 +90,11 @@ type ChatEventType =
   | 'end'             // 对话结束
   | 'error';          // 错误事件
 ```
+
+**思考过程展示**:
+- ✅ 支持展示模型推理过程（如 Claude extended thinking）
+- ✅ 前端可折叠展示思考文本，思考中显示旋转动画
+- ✅ 思考结束后可手动展开查看推理过程
 
 **前端页面**:
 - `/home` - 聊天主页 (SSE 流式渲染 + 工具折叠面板 + 会话归档 + 表格预览)
@@ -105,6 +113,7 @@ type ChatEventType =
 | `system_tools` | utility | 时间查询、日期计算、UUID 生成 |
 | `math_tools` | utility | 数学计算、哈希、Base64、密码生成 |
 | `multi_search` | search | Tavily/Brave/Bing/SearXNG/DuckDuckGo 多级降级搜索 |
+| `browser` | search | 浏览器自动化：网页浏览、标题获取、链接提取 |
 | `note_tools` | data | 工作区文件读写、笔记管理 |
 
 **API 端点**:
@@ -121,17 +130,19 @@ POST   /api/tools/{code}/disable      # 禁用工具集
 - 平台感知: REST API 暴露完整工具目录,前端可动态展示
 - 细粒度权限: 支持工具级 `hasAuthority('system:user:add')` 控制
 
-### 4. Token 使用统计 (成熟度: ⭐⭐⭐)
+### 4. Token 使用统计 (成熟度: ⭐⭐⭐⭐⭐)
 
 **实际实现**:
 - ✅ 流水记录表: `token_usage_log` 记录每次模型调用
 - ✅ 月度汇总表: `token_usage_summary` 按月聚合统计
 - ✅ 数据库触发器: 插入流水时自动更新汇总 (`trg_update_token_summary_after_insert`)
+- ✅ **自动记录**: 通过 `ModelCallEndEvent` 事件驱动，模型调用时自动提取 `ChatUsage` 异步落库
 - ✅ 管理员视图: 租户内用户 Token 使用排行
 
-**️ 未完成部分**:
--  **自动记录未实现**: 当前需手动调用 `TokenUsageService.recordUsage()`,模型调用时不会自动记录
-- ⚠️ **临时方案**: 提供测试接口 `POST /api/token-usage/test-record` 手动记录用于验证
+**技术实现**:
+- 事件驱动：`AgentService.toChatEvent()` 处理 `ModelCallEndEvent`，提取 `inputTokens/outputTokens`
+- 异步写入：`Mono.fromRunnable().subscribeOn(boundedElastic).subscribe()`，不阻塞 SSE 流
+- 回合级缓存：`providerName/modelName` 在对话开始时解析，避免重复查库+解密 API Key
 
 **API 端点**:
 ```
@@ -147,24 +158,26 @@ POST   /api/token-usage/test-record            # 测试接口(手动记录)
 - `/token-usage` - Token 统计页 (本月汇总卡片 + 趋势图表 + 流水表格 + 管理员视图)
 
 **后续优化方向**:
-- 方案 A: 研究 AgentScope Middleware API,拦截模型调用自动记录
-- 方案 B: 在 `AgentService.doChat()` 的 `end` 事件中提取 usage
-- 方案 C: ModelFactory 包装器,拦截 Model 响应
+- 配额管理：Token 月度上限、超额告警
+- 成本分析：按模型/用户/部门统计费用
 
 ### 5. 模型提供商配置 (成熟度: ⭐⭐⭐⭐⭐)
 
 **实际实现**:
 - ✅ 三级作用域: PLATFORM (平台级) / TENANT (租户级) / USER (用户级)
 - ✅ 就近覆盖解析: 用户级 → 租户级 → 平台级,优先级递减
-- ✅ 支持 8+ 提供商: DashScope / DeepSeek / OpenAI / Ollama / Groq / HuggingFace / 阿里云百炼
+- ✅ 支持 7+ 提供商: DashScope / DeepSeek / OpenAI / Ollama / Anthropic Claude / Google Gemini / 火山方舟
 
-**已配置的免费模型**:
-| 提供商 | 类型 | 默认模型 | API Key | 特点 |
-|-------|------|---------|---------|------|
-| **ollama** | Ollama | llama3.2 | 无需 | 本地运行,完全免费 |
-| **groq** | OpenAI 兼容 | llama3.1-70b | 需申请 | 极速推理,免费额度高 |
-| **huggingface** | OpenAI 兼容 | mistral-7b | 需申请 | HF Hub 集成 |
-| **deepseek** | OpenAI 兼容 | deepseek-chat | 需申请 | 中文能力强 |
+**已支持的模型提供商**:
+| 提供商 | 类型 | 默认模型 | API Key 环境变量 | 特点 |
+|-------|------|---------|-----------------|------|
+| **dashscope** | DashScope | qwen-plus | DASHSCOPE_API_KEY | 阿里云通义千问 |
+| **deepseek** | OpenAI 兼容 | deepseek-chat | DEEPSEEK_API_KEY | 中文能力强 |
+| **openai** | OpenAI | gpt-4.1-mini | OPENAI_API_KEY | GPT 系列 |
+| **ollama** | Ollama | qwen2.5:7b | 无需 | 本地运行,完全免费 |
+| **anthropic** | Anthropic | claude-sonnet-4-20250514 | ANTHROPIC_API_KEY | Claude 3.5/3.7/4 系列 |
+| **gemini** | Gemini | gemini-2.0-flash | GEMINI_API_KEY | Google Gemini 2.0/2.5 |
+| **volcengine** | OpenAI 兼容 | doubao-seed-2-1-pro | ARK_API_KEY | 火山方舟/豆包 |
 
 **API 端点**:
 ```
@@ -179,13 +192,21 @@ POST   /api/config/model-providers/{id}/test # 测试连接
 ```java
 public Model createModel(ModelProviderConfig cfg) {
     return switch (provider) {
-        case "deepseek" -> buildDeepSeek(cfg);   // OpenAI 兼容协议
-        case "openai"   -> buildOpenAi(cfg);     // OpenAI/Kimi/vLLM
-        case "ollama"   -> buildOllama(cfg);     // 本地 Ollama
-        default         -> buildDashScope(cfg);  // 阿里云通义千问
+        case "deepseek"   -> buildDeepSeek(cfg);     // OpenAI 兼容协议
+        case "volcengine" -> buildVolcengine(cfg);   // 火山方舟/豆包
+        case "openai"     -> buildOpenAi(cfg);       // OpenAI/Kimi/vLLM
+        case "ollama"     -> buildOllama(cfg);       // 本地 Ollama
+        case "anthropic"  -> buildAnthropic(cfg);    // Claude 3.5/3.7/4
+        case "gemini"     -> buildGemini(cfg);       // Google Gemini
+        default           -> buildDashScope(cfg);    // 阿里云通义千问
     };
 }
 ```
+
+**模型容错配置**:
+- 最大重试 3 次，指数退避（1s → 2s → 4s）
+- 超时 120s
+- 所有提供商统一使用 `ExecutionConfig` 配置
 
 ### 6. MCP 服务器集成 (成熟度: ⭐⭐⭐⭐)
 
@@ -216,7 +237,7 @@ DELETE /api/config/mcp-servers/{id}    # 删除配置
 POST   /api/config/mcp-servers/{id}/test # 测试连接
 ```
 
-### 7. AgentScope 满血能力 (成熟度: ⭐⭐⭐⭐)
+### 7. AgentScope 满血能力 (成熟度: ⭐⭐⭐⭐⭐)
 
 **实际实现**:
 - ✅ **HarnessAgent 单例**: 全局一个实例,按 `(userId, sessionId)` 隔离状态
@@ -225,11 +246,21 @@ POST   /api/config/mcp-servers/{id}/test # 测试连接
 - ✅ **上下文压缩**: 消息数超阈值自动蒸馏摘要 (`CompactionConfig`)
 - ✅ **Redis 状态存储**: `RedisAgentStateStore` 支持分布式部署
 - ✅ **AgentTraceMiddleware**: 执行链路追踪
+- ✅ **PerformanceMiddleware**: 性能监控（对话/推理/执行/模型调用四维度耗时）
+- ✅ **GuardrailsMiddleware**: 安全护栏（Prompt Injection 防护 + 输出脱敏）
+- ✅ **思考过程透传**: `ThinkingBlockStart/Delta/EndEvent` 映射为 SSE 事件，前端可折叠展示
+- ✅ **跨会话记忆**: `SessionSummaryService` 对话结束自动生成摘要，新会话注入系统提示词
+- ✅ **技能自学习**: `SkillCuratorConfig` 已接入，7天间隔/30天stale/90天归档
+- ✅ **子 Agent 委派**: `SubagentDeclaration` 编程式注册 + 提示词后缀双通道
+- ✅ **Plan Mode**: 支持只读规划模式
 
-**⚠️ 部分实现/待完善**:
-- ⚠️ **技能自学习**: 框架已接入 (`SkillCuratorConfig`),但未实际测试技能起草/审核流程
-- ⚠️ **子 Agent 委派**: 支持 `subagents/` 目录,但未验证复杂任务拆解效果
-- ⚠️ **Plan Mode**: 支持只读规划模式,但前端未提供切换 UI
+**Middleware 链执行顺序**:
+```
+GuardrailsMiddleware (输入过滤 + 输出脱敏)
+  → AgentTraceMiddleware (执行链路追踪)
+    → PerformanceMiddleware (性能监控)
+      → HarnessAgent 内置 Middleware
+```
 
 **配置位置**:
 ```yaml
@@ -239,14 +270,24 @@ claw:
     workspace-root: D:/claw-agent/.agentscope/workspace
 ```
 
-### 8. 渠道管理 (成熟度: ⭐⭐⭐)
+### 8. 渠道管理 (成熟度: ⭐⭐⭐⭐⭐)
 
 **实际实现**:
 - ✅ 渠道绑定: 支持微信/钉钉/飞书等外部渠道
 - ✅ Webhook 接收: `POST /api/webhook/{channelType}` 接收外部消息
 - ✅ 适配器模式: `ChannelAdapter` 接口支持扩展新渠道
-- ⚠️ 消息投递: Webhook 消息解析完成，但投递到 Agent 会话待完善
-- ⚠️ 签名验证: 各渠道适配器需实现具体验证逻辑
+- ✅ **消息投递**: Webhook 消息解析后投递到 Agent 会话，收集回复后通过渠道发回
+- ✅ **签名验证**: `ChannelAdapter.verifySignature()` 默认方法，各渠道可覆盖实现具体算法
+- ✅ **群成员同步**: `syncGroupMembers()` 调用适配器 `fetchGroupMembers()` 拉取最新成员
+
+**消息路由流程**:
+```
+Webhook 接收 → 签名验证 → 路由到用户 → 构建 LoginUser → Agent 对话 → 收集回复 → 渠道发回
+```
+
+**单聊 vs 群聊**:
+- 单聊：根据 `channelType + channelUserId` 查找绑定用户，投递到个人会话
+- 群聊：根据 `channelType + groupId` 查找群成员，取第一个成员投递到共享会话
 
 **API 端点**:
 ```
@@ -424,18 +465,18 @@ Agent 配置 → 运行参数 → permission_mode
 | 功能模块 | 成熟度 | 说明 |
 |---------|-------|------|
 | **多租户与权限** | ⭐⭐⭐⭐⭐ | 完整实现，生产就绪 |
-| **智能对话系统** | ⭐⭐⭐⭐⭐ | 完整实现，SSE 流式 + HITL + 会话归档 |
-| **动态工具注册** | ⭐⭐⭐⭐⭐ | 完整实现，注解扫描 + 运行时管理 |
+| **智能对话系统** | ⭐⭐⭐⭐⭐ | 完整实现，SSE 流式 + HITL + 思考过程展示 |
+| **动态工具注册** | ⭐⭐⭐⭐⭐ | 完整实现，注解扫描 + 运行时管理 + 浏览器工具 |
 | **模型提供商配置** | ⭐⭐⭐⭐⭐ | 完整实现，三级作用域 + 8+ 提供商 |
 | **权限模式动态化** | ⭐⭐⭐⭐⭐ | 完整实现，五种模式动态调整 |
+| **AgentScope 能力** | ⭐⭐⭐⭐⭐ | 满血版，Middleware 链 + 思考透传 + 跨会话记忆 |
+| **渠道管理** | ⭐⭐⭐⭐⭐ | 完整实现，Webhook 投递 + 签名验证 + 群成员同步 |
+| **Token 使用统计** | ⭐⭐⭐⭐⭐ | 自动记录 + 数据库 + API + 前端完整 |
 | **定时任务** | ⭐⭐⭐⭐ | 完整实现，CRUD + 启停 + 日志 + 邮件通知 |
 | **邮件配置** | ⭐⭐⭐⭐ | 完整实现，SMTP 配置 + 三级作用域 |
 | **预设模板市场** | ⭐⭐⭐⭐ | 完整实现，浏览 + 使用 + 搜索 |
 | **流水线编排** | ⭐⭐⭐⭐ | 完整实现，内置外贸客户开发模板 |
 | **MCP 服务器集成** | ⭐⭐⭐⭐ | 基本实现，需注意 mcp-remote 桥接 |
-| **Token 使用统计** | ⭐⭐⭐⭐ | 数据库+API+前端完整，**自动记录待实现** |
-| **AgentScope 能力** | ⭐⭐⭐⭐ | 核心能力已接入，技能/子 Agent 待验证 |
-| **渠道管理** | ⭐⭐⭐ | 基本实现，Webhook 消息投递待完善 |
 | **部门管理** | ⭐⭐ | 数据库存在，前端缺失 |
 | **数据字典** | ⭐⭐⭐ | 基本实现，使用场景有限 |
 | **在线监控** | ⭐⭐ | 简化实现，无实时推送 |
@@ -494,23 +535,24 @@ Agent 配置 → 运行参数 → permission_mode
 
 ## 📝 下一步优化建议
 
-### P0 (高优先级)
-1. **Webhook 消息投递**: 完善渠道管理，实现 Webhook 消息到 Agent 会话的投递
-2. **Webhook 签名验证**: 各渠道适配器实现签名验证，保障安全性
-3. **Token 自动记录**: 实现 Middleware 或事件监听，模型调用时自动记录
+### P1 (高优先级)
+1. **可观测性集成**: 引入 Micrometer + Prometheus，暴露 Middleware 指标到监控平台
+2. **CodeExecutionTool**: 实现代码执行工具，支持 Python/Java 代码沙箱运行
+3. **Gemini 模型支持**: 接入 Google Gemini 模型提供商
 
-### P1 (中优先级)
-4. **群成员同步**: 实现渠道群成员自动同步功能
-5. **定时任务增强**: 失败重试机制、执行统计可视化
-6. **技能测试**: 实际验证 `code-review` / `data-analysis` 技能调用流程
-7. **子 Agent 验证**: 测试复杂任务拆解为子任务的效果
+### P2 (中优先级)
+4. **定时任务增强**: 失败重试机制、执行统计可视化
+5. **技能测试**: 实际验证 `code-review` / `data-analysis` 技能调用流程
+6. **子 Agent 验证**: 测试复杂任务拆解为子任务的效果
+7. **浏览器通知**: 前端实现 Web Push 通知
+8. **暗色模式**: 前端支持暗色主题切换
 
-### P2 (低优先级)
-8. **前端体验优化**: 聊天消息搜索、批量操作、浏览器通知、暗色模式
+### P3 (低优先级)
 9. **流水线模板扩展**: 周报生成、竞品监控、行业资讯聚合等场景
 10. **WebSocket 推送**: 实现在线监控实时推送
 11. **配额管理**: Token 月度上限、超额告警
 12. **成本分析**: 按模型/用户/部门统计费用
+13. **部门管理前端**: 开发部门管理页面
 
 ---
 

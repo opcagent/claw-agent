@@ -71,6 +71,276 @@ common      → Result / ResultCode / BizException / 全局异常处理器
 - 中间件与工具中访问状态一律用 `RuntimeContext.resolveAgentState(ctx, agent)`，禁用 `agent.getAgentState()`（并发不安全）；
 - 新增自定义工具用 `@Tool` 注解 + 注册进 Toolkit，并在权限系统中登记 ALLOW/ASK 规则。
 
+## 7.1 工具集（ToolSet）开发规范
+
+### 7.1.1 工具集元数据（@ToolSet 注解）
+
+每个工具类必须添加 `@ToolSet` 注解，声明工具集元数据：
+
+```java
+@Slf4j
+@ToolSet(
+    code = "my_tools",           // 唯一标识：小写字母+下划线
+    name = "我的工具集",          // 中文显示名称
+    description = "提供XX功能",   // 50字以内功能描述
+    category = "utility",        // 分类：utility/search/data/code/ai/system
+    enabledByDefault = true,     // 新用户是否默认启用
+    version = "1.0.0"            // 语义化版本号
+)
+public class MyTools { ... }
+```
+
+**必填字段**：
+- `code` — 唯一标识，Java 常量定义在 `common.ToolCodes`，命名 snake_case
+- `name` — 中文显示名称
+- `description` — 功能描述（禁止 Markdown 或特殊字符）
+- `category` — 必须在预定义分类中：`utility`/`search`/`data`/`code`/`ai`/`system`
+- `enabledByDefault` — 默认启用状态
+
+**可选字段**：
+- `version` — 语义化版本号（默认 "1.0.0"）
+- `dependencies` — 依赖的其他工具集 code 列表
+- `requiresHITL` — 是否需要 HITL 审批（默认 false）
+- `allowedRoles` — 适用角色列表（空表示所有角色）
+
+### 7.1.2 工具方法（@Tool 注解）
+
+工具方法使用 `@Tool` 注解，参数使用 `@ToolParam`：
+
+```java
+@Tool(name = "search_web", description = "联网搜索网页信息，返回标题和摘要")
+public String searchWeb(
+        @ToolParam(name = "query", description = "搜索关键词") String query,
+        @ToolParam(name = "num_results", description = "返回结果数量", required = false) Integer numResults) {
+    // 实现逻辑
+}
+```
+
+**命名规范**：
+- 工具名 `name` — snake_case（如 `search_web`、`get_current_time`）
+- 参数名 `name` — snake_case（如 `num_results`、`date_format`）
+
+**参数规范**：
+- `required` — 是否必填（默认 true），可选参数需设默认值
+- `description` — 参数说明，清晰描述用途和格式要求
+
+### 7.1.3 工具注册流程
+
+**自动注册**（无特殊构造参数）：
+- 添加 `@ToolSet` 注解后，`ToolRegistry` 启动时自动扫描并注册
+- 工具类必须有公共无参构造函数
+
+**手动注册**（需要特殊构造参数）：
+- 在 `AgentRegistry.buildHarnessAgent()` 中手动 `new` 实例
+- 加入 `manualToolCodes` 集合跳过自动注册
+- 示例：`NoteTools(workspace)`、`KnowledgeSearchTools(workspace)`、`MultiSearchTools(config, service, proxy)`
+
+### 7.1.4 工具集开发检查清单
+
+新增工具集时必须完成以下步骤：
+
+- [ ] 在 `common/ToolCodes.java` 中定义 code 常量
+- [ ] 工具类添加 `@ToolSet` 注解（含所有必填字段）
+- [ ] 每个 `@Tool` 方法有完整 Javadoc（参数、返回值、异常说明）
+- [ ] 需要特殊构造的工具加入 `manualToolCodes` 并在 `AgentRegistry` 手动注册
+- [ ] 在 `CapabilityService` 中登记工具权限规则（ALLOW/ASK）
+- [ ] 更新 `docs/TOOLS_REFERENCE.md` 文档
+
+## 7.2 MCP 服务器集成规范
+
+### 7.2.1 MCP 配置方式
+
+MCP 服务器通过数据库三级作用域配置（`agent_mcp_server` 表），支持运行时动态增删：
+
+```sql
+INSERT INTO agent_mcp_server (code, name, transport, command, args, scope, owner_id) 
+VALUES ('git', 'Git MCP', 'stdio', 'npx', '["-y", "@modelcontextprotocol/server-git"]', 'PLATFORM', NULL);
+```
+
+**传输协议**：
+- `stdio` — 本地进程，通过标准输入输出通信（需安装对应 npm 包）
+- `http` — 远程服务，通过 HTTP SSE 通信（需使用 `mcp-remote` 桥接）
+
+### 7.2.2 MCP 开发注意事项
+
+- AgentScope Java **不支持直接连接远程 MCP**，必须使用 `mcp-remote` 桥接
+- stdio 类型需在服务器上安装对应 npm 包（如 `@modelcontextprotocol/server-git`）
+- MCP 工具自动注册到 Toolkit，无需额外代码
+- 可通过 `tools.json` 白名单控制允许的 MCP 工具
+
+### 7.2.3 新增 MCP 服务器检查清单
+
+- [ ] 确认传输协议类型（stdio/http）
+- [ ] stdio 类型确认 npm 包已安装
+- [ ] http 类型配置 `mcp-remote` 桥接地址
+- [ ] 在 `agent_mcp_server` 表中添加配置记录
+- [ ] 测试连接（`POST /api/config/mcp-servers/{id}/test`）
+- [ ] 更新 `docs/PLATFORM_DEFINITION.md` 文档
+
+## 7.3 技能（Skill）开发规范
+
+### 7.3.1 技能文件结构
+
+技能以 Markdown 文件形式存储在工作区 `skills/` 目录下：
+
+```
+workspace/
+└── skills/
+    ├── code-review/
+    │   └── SKILL.md        # 技能定义文件
+    ├── data-analysis/
+    │   └── SKILL.md
+    └── regex-tester/
+        └── SKILL.md
+```
+
+### 7.3.2 SKILL.md 文件格式
+
+```markdown
+---
+name: code-review
+description: 代码审查，检查规范性和潜在问题
+version: 1.0.0
+author: system
+triggers:
+  - 代码审查
+  - code review
+dependencies:
+  - eslint
+  - pylint
+---
+
+# 代码审查技能
+
+## 触发条件
+当用户请求代码审查时触发此技能。
+
+## 执行步骤
+1. 读取目标代码文件
+2. 运行 ESLint/Pylint 检查
+3. 分析结果并生成报告
+4. 提供修复建议
+
+## 输出格式
+- 问题列表（严重程度、位置、描述）
+- 修复建议
+- 总体评分
+```
+
+**Frontmatter 字段**：
+- `name` — 技能唯一标识（snake_case）
+- `description` — 技能功能描述
+- `version` — 语义化版本号
+- `author` — 作者（system/user）
+- `triggers` — 触发关键词列表
+- `dependencies` — 外部依赖（如 eslint、pandas）
+
+### 7.3.3 技能自学习机制
+
+AgentScope 内置技能自学习闭环：
+
+1. **技能起草**：Agent 完成复杂任务后可调用 `propose_skill` 提议新技能
+2. **后台整理**：`SkillCuratorConfig` 定期整理技能库
+   - 间隔：7 天
+   - Stale 阈值：30 天
+   - 归档阈值：90 天
+3. **技能加载**：新会话自动加载相关技能到上下文
+
+### 7.3.4 新增技能检查清单
+
+- [ ] 在 `skills/` 目录创建技能文件夹
+- [ ] 编写 `SKILL.md` 文件（含完整 frontmatter）
+- [ ] 明确触发条件和执行步骤
+- [ ] 列出外部依赖（如有）
+- [ ] 测试技能调用流程
+- [ ] 更新 `docs/PLATFORM_DEFINITION.md` 文档
+
+## 7.4 Middleware 开发规范
+
+### 7.4.1 Middleware 类型
+
+AgentScope 提供四种 Middleware 钩子：
+
+| 钩子 | 触发时机 | 典型用途 |
+|------|---------|----------|
+| `onSystemPrompt` | 系统提示词构建 | 注入上下文、修改提示词 |
+| `onAgent` | Agent 调用前后 | 输入过滤、输出脱敏 |
+| `onReasoning` | 推理阶段 | 思考过程记录 |
+| `onActing` | 执行阶段 | 工具调用拦截 |
+| `onModelCall` | 模型调用前后 | Token 统计、性能监控 |
+
+### 7.4.2 Middleware 注册顺序
+
+Middleware 按注册顺序形成洋葱模型，先注册的先执行：
+
+```java
+// AgentRegistry 中的注册顺序
+agentBuilder.middleware(guardrailsMiddleware)   // 1. 安全护栏（最先执行）
+           .middleware(agentTraceMiddleware)     // 2. 执行链路追踪
+           .middleware(performanceMiddleware);   // 3. 性能监控
+```
+
+### 7.4.3 Middleware 开发注意事项
+
+- 输入过滤类 Middleware 注册为第一个（如 `GuardrailsMiddleware`）
+- 性能监控类 Middleware 放在追踪之后
+- Middleware 中禁止阻塞操作，耗时操作用 `Mono.fromCallable().subscribeOn(boundedElastic)`
+- 异常处理：Middleware 异常不应阻断主流程，catch 后记日志并继续
+
+## 7.5 子 Agent 开发规范
+
+### 7.5.1 子 Agent 定义方式
+
+**方式一：Markdown 文件（推荐）**
+
+在 `subagents/` 目录创建 `.md` 文件：
+
+```markdown
+---
+name: researcher
+description: 研究助手，擅长信息检索和整理
+model: deepseek:deepseek-chat
+tools:
+  - multi_search
+  - browser
+---
+
+# 研究助手
+
+你是一名专业的研究助手，擅长信息检索、整理和分析。
+
+## 工作方式
+1. 理解研究目标
+2. 制定检索策略
+3. 收集和整理信息
+4. 生成结构化报告
+```
+
+**方式二：编程式注册（SubagentDeclaration）**
+
+```java
+SubagentDeclaration.builder()
+    .name("researcher")
+    .description("研究助手")
+    .model(chatModel)
+    .tools(Toolkit.builder().addTool(searchTools).build())
+    .workspaceMode(WorkspaceMode.ISOLATED)
+    .build();
+```
+
+### 7.5.2 子 Agent 调用方式
+
+Agent 通过内置工具调用子 Agent：
+- `agent_spawn(name)` — 启动子 Agent
+- `agent_send(name, message)` — 向子 Agent 发送消息
+
+### 7.5.3 子 Agent 开发注意事项
+
+- 子 Agent 工作区默认隔离（`ISOLATED`），互不干扰
+- 子 Agent 继承父 Agent 的权限模式
+- 后台任务完成后通过 system-reminder 通知父 Agent
+- 避免过度嵌套（子 Agent 再调用子 Agent），建议最多 2 层
+
 ## 8. 安全规约
 
 - 密码一律 BCrypt 加密存储，禁止明文与可逆加密；

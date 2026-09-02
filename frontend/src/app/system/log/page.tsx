@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/table";
 import { api } from "@/lib/api";
 import { useAuthGuard } from "@/lib/use-auth-guard";
-import type { LoginLog, OperLog, PageResult } from "@/lib/types";
+import type { DictData, LoginLog, OperLog, PageResult } from "@/lib/types";
 
 /** 日志每页条数（后端默认 20，前端保持一致） */
 const PAGE_SIZE = 20;
@@ -85,6 +85,11 @@ function LogAdminPage() {
   const [loginEventType, setLoginEventType] = useState<string>("all");
   const [loginStatusFilter, setLoginStatusFilter] = useState<string>("all");
 
+  // 字典下拉选项（oper_type / common_status / event_type），失败时保留硬编码兜底
+  const [operTypeOptions, setOperTypeOptions] = useState<{ value: string; label: string }[]>([]);
+  const [statusOptions, setStatusOptions] = useState<{ value: string; label: string }[]>([]);
+  const [eventTypeOptions, setEventTypeOptions] = useState<{ value: string; label: string }[]>([]);
+
   const loadOper = useCallback(async (pageNum: number) => {
     setLoading(true);
     try {
@@ -134,6 +139,21 @@ function LogAdminPage() {
     if (tab === "oper") loadOper(operPage);
     else loadLogin(loginPage);
   }, [tab, operPage, loginPage, loadOper, loadLogin]);
+
+  // 字典数据：操作类型 / 通用状态 / 事件类型（只拉一次，失败静默保留硬编码兜底）
+  useEffect(() => {
+    const loadDict = (dictType: string, setter: (list: { value: string; label: string }[]) => void) => {
+      api.get<DictData[]>(`/api/dict/data/${dictType}`)
+        .then((res) => {
+          const list = (res.data || []).map((d) => ({ value: d.dictValue, label: d.dictLabel }));
+          if (list.length > 0) setter(list);
+        })
+        .catch(() => {});
+    };
+    loadDict("oper_type", setOperTypeOptions);
+    loadDict("common_status", setStatusOptions);
+    loadDict("event_type", setEventTypeOptions);
+  }, []);
 
   /** 刷新：回到各 Tab 首页重新拉取 */
   const refresh = () => {
@@ -201,12 +221,16 @@ function LogAdminPage() {
                   <span className="truncate">{OPER_TYPE_LABEL[operTypeFilter] || operTypeFilter}</span>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">全部类型</SelectItem>
-                  <SelectItem value="CREATE">新增</SelectItem>
-                  <SelectItem value="UPDATE">修改</SelectItem>
-                  <SelectItem value="DELETE">删除</SelectItem>
-                  <SelectItem value="GRANT">授权</SelectItem>
-                  <SelectItem value="OTHER">其他</SelectItem>
+                  {(operTypeOptions.length > 0 ? operTypeOptions : [
+                    { value: "all", label: "全部类型" },
+                    { value: "CREATE", label: "新增" },
+                    { value: "UPDATE", label: "修改" },
+                    { value: "DELETE", label: "删除" },
+                    { value: "GRANT", label: "授权" },
+                    { value: "OTHER", label: "其他" },
+                  ]).map((o) => (
+                    <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
               <Select value={operStatusFilter} onValueChange={(v) => { if (v != null) { setOperStatusFilter(v); setOperPage(1); } }}>
@@ -214,9 +238,13 @@ function LogAdminPage() {
                   <span className="truncate">{STATUS_LABEL[operStatusFilter] || operStatusFilter}</span>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">全部状态</SelectItem>
-                  <SelectItem value="1">成功</SelectItem>
-                  <SelectItem value="0">失败</SelectItem>
+                  {(statusOptions.length > 0 ? statusOptions : [
+                    { value: "all", label: "全部状态" },
+                    { value: "1", label: "成功" },
+                    { value: "0", label: "失败" },
+                  ]).map((o) => (
+                    <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
               <Button variant="outline" className="gap-1" onClick={() => setOperPage(1)}>
@@ -297,9 +325,13 @@ function LogAdminPage() {
                   <span className="truncate">{EVENT_TYPE_LABEL[loginEventType] || loginEventType}</span>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">全部事件</SelectItem>
-                  <SelectItem value="LOGIN">登录</SelectItem>
-                  <SelectItem value="LOGOUT">登出</SelectItem>
+                  {(eventTypeOptions.length > 0 ? eventTypeOptions : [
+                    { value: "all", label: "全部事件" },
+                    { value: "LOGIN", label: "登录" },
+                    { value: "LOGOUT", label: "登出" },
+                  ]).map((o) => (
+                    <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
               <Select value={loginStatusFilter} onValueChange={(v) => { if (v != null) { setLoginStatusFilter(v); setLoginPage(1); } }}>
@@ -307,9 +339,13 @@ function LogAdminPage() {
                   <span className="truncate">{STATUS_LABEL[loginStatusFilter] || loginStatusFilter}</span>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">全部状态</SelectItem>
-                  <SelectItem value="1">成功</SelectItem>
-                  <SelectItem value="0">失败</SelectItem>
+                  {(statusOptions.length > 0 ? statusOptions : [
+                    { value: "all", label: "全部状态" },
+                    { value: "1", label: "成功" },
+                    { value: "0", label: "失败" },
+                  ]).map((o) => (
+                    <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
               <Button variant="outline" className="gap-1" onClick={() => setLoginPage(1)}>

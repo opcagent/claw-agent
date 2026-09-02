@@ -8,6 +8,8 @@ import com.claw.agent.mapper.UserChannelMapper;
 import com.claw.agent.model.UserChannel;
 import com.claw.agent.security.LoginUser;
 import com.claw.agent.service.UserChannelService;
+import com.claw.agent.service.channel.ChannelAdapter;
+import com.claw.agent.service.channel.ChannelAdapterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -26,6 +28,8 @@ import java.util.List;
 @Service
 @RequiredArgsConstructor
 public class UserChannelServiceImpl extends ServiceImpl<UserChannelMapper, UserChannel> implements UserChannelService {
+
+    private final ChannelAdapterRegistry adapterRegistry;
 
     @Override
     public List<UserChannel> listByUser(LoginUser current) {
@@ -102,8 +106,55 @@ public class UserChannelServiceImpl extends ServiceImpl<UserChannelMapper, UserC
     @Transactional
     public void syncGroupMembers(LoginUser current, Long channelId) {
         UserChannel existed = getAndCheckOwnership(current, channelId);
-        // TODO: 调用渠道 API 同步群成员（需要各渠道适配器实现）
-        log.info("同步群组成员：channelId={}, user={}", channelId, current.getUserId());
+        // 检查是否为群组绑定
+        if (!StringUtils.hasText(existed.getChannelGroupId())) {
+            throw new BizException(ResultCode.PARAM_ERROR, "该渠道绑定不是群组，无法同步成员");
+        }
+        // 查找渠道适配器
+        String channelType = existed.getChannelType();
+        if (!adapterRegistry.hasAdapter(channelType)) {
+            throw new BizException(ResultCode.PARAM_ERROR, "未找到渠道适配器：" + channelType);
+        }
+        ChannelAdapter adapter = adapterRegistry.getAdapter(channelType);
+        // 调用渠道 API 拉取最新群成员
+        List<ChannelAdapter.GroupMember> members = adapter.fetchGroupMembers(
+                existed.getChannelGroupId(), existed.getAccessToken());
+        if (members == null || members.isEmpty()) {
+            log.warn("群组成员列表为空：channelId={}, groupId={}", channelId, existed.getChannelGroupId());
+            return;
+        }
+        // 同步到数据库：新增不存在的、更新已存在的
+        int added = 0, updated = 0;
+        for (ChannelAdapter.GroupMember member : members) {
+            UserChannel existingMember = baseMapper.selectOne(new LambdaQueryWrapper<UserChannel>()
+                    .eq(UserChannel::getChannelType, channelType)
+                    .eq(UserChannel::getChannelGroupId, existed.getChannelGroupId())
+                    .eq(UserChannel::getChannelUserId, member.channelUserId())
+                    .last("LIMIT 1"));
+            if (existingMember != null) {
+                // 更新显示名和角色
+                existingMember.setChannelUsername(member.channelUsername());
+                existingMember.setGroupRole(member.groupRole());
+                baseMapper.updateById(existingMember);
+                updated++;
+            } else {
+                // 新增成员绑定（userId 暂时为空，等待用户主动绑定）
+                UserChannel newMember = new UserChannel();
+                newMember.setChannelType(channelType);
+                newMember.setChannelGroupId(existed.getChannelGroupId());
+                newMember.setChannelGroupName(existed.getChannelGroupName());
+                newMember.setChannelUserId(member.channelUserId());
+                newMember.setChannelUsername(member.channelUsername());
+                newMember.setGroupRole(member.groupRole());
+                newMember.setStatus(1);
+                // userId 从已存在的绑定记录继承（同一群组的所有成员共享归属用户）
+                newMember.setUserId(existed.getUserId());
+                baseMapper.insert(newMember);
+                added++;
+            }
+        }
+        log.info("同步群组成员完成：channelId={}, groupId={}, added={}, updated={}",
+                channelId, existed.getChannelGroupId(), added, updated);
     }
 
     /**

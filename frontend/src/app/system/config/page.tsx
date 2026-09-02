@@ -30,10 +30,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { api } from "@/lib/api";
+import { api, modelApi, ModelCard } from "@/lib/api";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 import { useAuthStore } from "@/store/auth";
 import { TOOL_CATEGORY_LABEL } from "@/lib/types";
+import { ModelSelector } from "@/components/model-selector";
+
 import type {
   AgentConfigItem,
   DictData,
@@ -50,21 +52,15 @@ import type {
 
 type Scope = "USER" | "TENANT" | "PLATFORM";
 
-const PROVIDERS = [
-  { value: "dashscope", label: "阿里云通义千问" },
-  { value: "deepseek", label: "DeepSeek" },
-  { value: "volcengine", label: "火山方舟（豆包）" },
-  { value: "openai", label: "OpenAI 及兼容协议" },
-  { value: "ollama", label: "本地 Ollama" },
-];
-
 /** 提供商兑底默认值：字典未就绪时的回退；baseUrl 等字典不承载的字段由此回填 */
 const PROVIDER_DEFAULTS: Record<string, { displayName: string; modelName: string; baseUrl?: string }> = {
   dashscope: { displayName: "阿里云通义千问", modelName: "qwen-plus" },
+  openai: { displayName: "OpenAI 及兼容协议", modelName: "gpt-4.1-mini", baseUrl: "https://api.openai.com/v1" },
   deepseek: { displayName: "DeepSeek", modelName: "deepseek-chat", baseUrl: "https://api.deepseek.com" },
-  volcengine: { displayName: "火山方舟（豆包）", modelName: "doubao-seed-2-1-pro-260628", baseUrl: "https://ark.cn-beijing.volces.com/api/v3" },
-  openai: { displayName: "OpenAI 及兼容协议", modelName: "gpt-4.1-mini" },
   ollama: { displayName: "本地 Ollama", modelName: "qwen2.5:7b", baseUrl: "http://localhost:11434" },
+  anthropic: { displayName: "Anthropic Claude", modelName: "claude-sonnet-4-20250514", baseUrl: "https://api.anthropic.com" },
+  gemini: { displayName: "Google Gemini", modelName: "gemini-2.5-pro", baseUrl: "https://generativelanguage.googleapis.com" },
+  volcengine: { displayName: "火山方舟（豆包）", modelName: "doubao-seed-2-1-pro-260628", baseUrl: "https://ark.cn-beijing.volces.com/api/v3" },
 };
 
 /** 模型目录字典 dict_value 格式：厂商@模型名（按首个 @ 分隔，模型名自身可含冒号如 qwen2.5:7b） */
@@ -115,6 +111,8 @@ function ConfigPage() {
   const [params, setParams] = useState<AgentConfigItem[]>([]);
   const [paramKeys, setParamKeys] = useState<ParamKeyInfo[]>([]);
   const [providerModels, setProviderModels] = useState<DictData[]>([]);
+  /** 提供商下拉选项（字典 agent_model_provider，失败时回退 PROVIDER_DEFAULTS） */
+  const [providerOptions, setProviderOptions] = useState<{ value: string; label: string }[]>([]);
   const [systemProps, setSystemProps] = useState<SystemProps | null>(null);
   const [editProvider, setEditProvider] = useState<ModelProviderConfig | null>(null);
   const [editParam, setEditParam] = useState<AgentConfigItem | null>(null);
@@ -205,6 +203,14 @@ function ConfigPage() {
     api
       .get<DictData[]>("/api/dict/data/agent_provider_models")
       .then((res) => setProviderModels(res.data || []))
+      .catch(() => {});
+    // 提供商下拉：字典 agent_model_provider（label=中文名, value=厂商键）
+    api
+      .get<DictData[]>("/api/dict/data/agent_model_provider")
+      .then((res) => {
+        const list = (res.data || []).map((d) => ({ value: d.dictValue, label: d.dictLabel }));
+        if (list.length > 0) setProviderOptions(list);
+      })
       .catch(() => {});
     api
       .get<ToolKeyInfo[]>("/api/capability/toolKeys")
@@ -1110,7 +1116,7 @@ function ConfigPage() {
                       }
                     }}
                   >
-                    {PROVIDERS.map((p) => (
+                    {(providerOptions.length > 0 ? providerOptions : Object.entries(PROVIDER_DEFAULTS).map(([k, v]) => ({ value: k, label: v.displayName }))).map((p) => (
                       <option key={p.value} value={p.value}>
                         {p.label}
                       </option>
@@ -1127,51 +1133,19 @@ function ConfigPage() {
               </div>
               <div className="space-y-1.5">
                 <Label>模型名</Label>
-                {(() => {
-                  // 候选模型由字典「模型厂商模型目录」按厂商过滤生成；
-                  // 当前值不在候选内（字典外自定义）时回落到「自定义」手输
-                  const candidates = modelsOf(editProvider.provider);
-                  const inList = candidates.some(
-                    (d) => parseProviderModel(d.dictValue).model === editProvider.modelName
-                  );
-                  return (
-                    <>
-                      <select
-                        className="h-9 w-full rounded-md border bg-background px-2 text-sm"
-                        value={inList ? editProvider.modelName : "__custom__"}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          setEditProvider({
-                            ...editProvider,
-                            modelName: v === "__custom__" ? "" : v,
-                          });
-                        }}
-                      >
-                        {candidates.map((d) => {
-                          const model = parseProviderModel(d.dictValue).model;
-                          return (
-                            <option key={d.dictValue} value={model}>
-                              {d.dictLabel}（{model}）{d.defaultFlag === 1 ? " · 默认" : ""}
-                            </option>
-                          );
-                        })}
-                        <option value="__custom__">自定义模型…</option>
-                      </select>
-                      {!inList && (
-                        <Input
-                          placeholder="手输模型名，如 qwen-plus / gpt-5"
-                          className="mt-2 font-mono"
-                          value={editProvider.modelName}
-                          onChange={(e) =>
-                            setEditProvider({ ...editProvider, modelName: e.target.value })
-                          }
-                        />
-                      )}
-                    </>
-                  );
-                })()}
+                {/* 使用动态模型选择器替代静态下拉框 */}
+                <ModelSelector 
+                  provider={editProvider.provider} 
+                  onModelChange={(model: ModelCard) => {
+                    setEditProvider({
+                      ...editProvider,
+                      modelName: model.modelName,
+                    });
+                  }}
+                  defaultValue={editProvider.modelName}
+                />
                 <p className="text-xs text-muted-foreground">
-                  候选模型在「数据字典 → 模型厂商模型目录」维护，无需改代码即可扩展
+                  从提供商动态获取模型列表，支持实时查看模型上下文大小
                 </p>
               </div>
               <div className="space-y-1.5">

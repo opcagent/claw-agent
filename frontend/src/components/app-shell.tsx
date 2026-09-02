@@ -96,15 +96,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     api
       .get<SysMenu[]>("/api/auth/menus")
       .then((res) => {
-        const menuData = res.data || [];
-        setMenus(menuData);
-        // 调试日志：检查 Token 统计菜单是否存在
-        const tokenMenu = menuData.find(m => m.path === '/token-usage');
-        if (tokenMenu) {
-          console.log('✅ Token 统计菜单已加载:', tokenMenu);
-        } else {
-          console.warn('️ 未找到 Token 统计菜单');
-        }
+        setMenus(res.data || []);
       })
       .catch(() => {});
     api
@@ -153,17 +145,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   // 二级仅一项时无需侧栏（点击一级直达，避免冗余结构）
   // 但 Token 统计页面需要侧边栏展示其他系统管理菜单
   const showSidebar = sideMenus.length >= 1;
-  
-  // 调试日志：检查侧边栏菜单
-  if (pathname.includes('token')) {
-    console.log('📍 当前路径:', pathname);
-    console.log('📍 激活的一级菜单:', activeTop?.menuName, '(ID:', activeTop?.id, ')');
-    console.log('📍 所有顶级菜单:', topMenus.map(m => ({ id: m.id, name: m.menuName, path: m.path })));
-    console.log('📍 childrenByParent Map:', Array.from(childrenByParent.entries()).map(([k, v]) => ({ parentId: k, count: v.length, menus: v.map(m => m.menuName) })));
-    console.log('📍 侧边栏菜单数量:', sideMenus.length);
-    console.log('📍 showSidebar:', showSidebar);
-    console.log('📍 侧边栏菜单列表:', sideMenus.map(m => ({ id: m.id, name: m.menuName, path: m.path })));
-  }
 
   /** 一级目录的跳转目标：自身无页面，取第一个二级菜单 */
   function topTarget(top: SysMenu): string {

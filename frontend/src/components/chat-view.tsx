@@ -10,7 +10,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
-import { AlertTriangle, Archive, ArchiveRestore, Bot, Check, ChevronDown, ChevronUp, Clipboard, Copy, Download, FileText, LayoutGrid, Loader2, Paperclip, Pencil, Plus, Send, Slash, Table, Trash2, User, X, ZoomIn } from "lucide-react";
+import { AlertTriangle, Archive, ArchiveRestore, Bot, Brain, Check, ChevronDown, ChevronUp, Clipboard, Copy, Download, FileText, LayoutGrid, Loader2, Paperclip, Pencil, Plus, Send, Slash, Square, Table, Trash2, User, Wrench, X, ZoomIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -28,6 +28,10 @@ type Block =
       kind: "assistant"; 
       text: string; 
       thinking: boolean; 
+      /** 思考过程文本（可折叠展示） */
+      thinkingText: string;
+      /** 思考区域是否展开（默认折叠） */
+      thinkingExpanded: boolean;
       error?: boolean; 
       createTime?: string;
       /** 工具调用记录（不单独渲染，仅在气泡内折叠展示） */
@@ -110,17 +114,23 @@ function AuthImage({
   const [error, setError] = useState(false);
 
   useEffect(() => {
-    let revoked = false;
+    let cancelled = false;
+    let objectUrl: string | null = null;
     fetchAuthImageBlobUrl(fileName)
       .then((url) => {
-        if (!revoked) setBlobUrl(url);
+        if (cancelled) {
+          URL.revokeObjectURL(url);
+        } else {
+          objectUrl = url;
+          setBlobUrl(url);
+        }
       })
       .catch(() => {
-        if (!revoked) setError(true);
+        if (!cancelled) setError(true);
       });
     return () => {
-      revoked = true;
-      if (blobUrl) URL.revokeObjectURL(blobUrl);
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileName]);
@@ -252,6 +262,8 @@ function messageToBlock(m: ChatMessage): Block {
     kind: "assistant",
     text: m.content || "",
     thinking: false,
+    thinkingText: "",
+    thinkingExpanded: false,
     error: m.status === 0,
     createTime: m.createTime,
   };
@@ -329,6 +341,45 @@ export default function ChatView() {
   const pendingTextRef = useRef("");
   const currentTargetIdRef = useRef<string>("");
 
+  // 当前 SSE 流的 AbortController：切换会话或卸载时用于中止流
+  const streamAbortRef = useRef<AbortController | null>(null);
+  // 用户主动点击「取消」标记（区分取消 vs 切换会话导致的 AbortError）
+  const userCancelledRef = useRef(false);
+  // 当前活跃的流 assistantId（finally 中据此判断是否应修改 state，防止旧流干扰新流）
+  const activeStreamIdRef = useRef<string | null>(null);
+  // 已被 cancelStream 同步清理过的 assistantId（finally 据此跳过，避免重复操作或恢复已删气泡）
+  const cancelledIdsRef = useRef<Set<string>>(new Set());
+
+  /** 中止当前 SSE 流并清理 rAF 缓冲区（切换会话/卸载时调用） */
+  const abortCurrentStream = useCallback(() => {
+    // 中止 SSE 流
+    if (streamAbortRef.current) {
+      streamAbortRef.current.abort();
+      streamAbortRef.current = null;
+    }
+    // 取消 rAF 并清空缓冲区，防止文本泄漏到新会话
+    if (rafIdRef.current) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = 0;
+    }
+    pendingTextRef.current = "";
+    currentTargetIdRef.current = "";
+    // 切换会话/卸载时不再需要保留活跃流标记
+    activeStreamIdRef.current = null;
+  }, []);
+
+  /** 用户点击「取消」：同步移除气泡 + 中止流（不等异步 Promise settle） */
+  const cancelStream = useCallback(() => {
+    userCancelledRef.current = true;
+    // 同步移除助手气泡，确保 UI 立即更新（api.stream 的 Promise 可能延迟 settle）
+    const cancelledId = activeStreamIdRef.current;
+    if (cancelledId) {
+      cancelledIdsRef.current.add(cancelledId);
+      setBlocks((prev) => prev.filter((b) => b.id !== cancelledId));
+    }
+    abortCurrentStream();
+  }, [abortCurrentStream]);
+
   /** 将缓冲区的文本增量在下一帧统一写入 blocks state */
   const flushPendingText = useCallback(() => {
     const text = pendingTextRef.current;
@@ -388,6 +439,13 @@ export default function ChatView() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [blocks]);
 
+  // 组件卸载时中止正在进行的 SSE 流
+  useEffect(() => {
+    return () => {
+      abortCurrentStream();
+    };
+  }, [abortCurrentStream]);
+
   /* ---------------- 区块操作 ---------------- */
 
   function appendBlock(block: Block) {
@@ -422,9 +480,30 @@ export default function ChatView() {
   /* ---------------- SSE 事件处理 ---------------- */
 
   function handleEvent(event: ChatEvent, targetBlockId: string) {
+    // 流已被用户取消 → 忽略所有后续事件，防止已移除的气泡被重新操作
+    if (cancelledIdsRef.current.has(targetBlockId)) return;
     switch (event.type) {
       case "start":
         if (event.sessionId) setCurrentSessionId(event.sessionId);
+        break;
+      case "thinking_start":
+        // 模型开始思考：标记思考状态
+        updateAssistant(targetBlockId, (b) => {
+          b.thinking = true;
+        });
+        break;
+      case "thinking":
+        // 思考增量文本：累积到思考区域
+        updateAssistant(targetBlockId, (b) => {
+          b.thinkingText = (b.thinkingText || "") + (event.delta || "");
+        });
+        break;
+      case "thinking_end":
+        // 思考结束：关闭思考状态，保留思考文本可折叠查看
+        updateAssistant(targetBlockId, (b) => {
+          b.thinking = false;
+          b.thinkingExpanded = false;
+        });
         break;
       case "text":
         // rAF 批处理：增量累积到 ref，每帧统一 flush，避免高频 setState
@@ -436,12 +515,15 @@ export default function ChatView() {
             flushPendingText();
           });
         }
+        // 注意：不在此处 setSending(false)，保持「取消」按钮直到流真正结束
         break;
       case "tool_start":
         // 记录工具调用开始（不创建独立区块，只在助手气泡内展示）
+        // #2841 容错：toolName 和 toolCallId 都可能为空（JSON 解析失败时），使用默认名称
         updateAssistant(targetBlockId, (b) => {
           if (!b.toolCalls) b.toolCalls = [];
-          b.toolCalls.push({ name: event.toolName || event.toolCallId || "", status: 'running', callId: event.toolCallId });
+          const toolName = event.toolName || event.toolCallId || "未知工具";
+          b.toolCalls.push({ name: toolName, status: 'running', callId: event.toolCallId });
         });
         break;
       case "tool_end":
@@ -455,9 +537,10 @@ export default function ChatView() {
           if (runningTool) {
             runningTool.status = event.state === "SUCCESS" ? 'success' : 'error';
           } else {
-            // 如果没有找到运行中的工具，创建新记录
+            // #2841 容错：如果没有找到运行中的工具，创建新记录（使用默认名称防止空白）
+            const fallbackName = event.toolName || event.toolCallId || "未知工具";
             b.toolCalls.push({ 
-              name: `${statusIcon} ${event.toolName || event.toolCallId || "工具"}`, 
+              name: `${statusIcon} ${fallbackName}`, 
               status: event.state === "SUCCESS" ? 'success' : 'error',
               callId: event.toolCallId 
             });
@@ -499,15 +582,44 @@ export default function ChatView() {
           }
         }
         break;
+      case "end":
+        // 回合结束兜底：部分模型不发 thinking_end（如不支持思考的模型），
+        // 必须在此确保思考态关闭，否则 UI 永久停留在「思考中…」
+        // 同时 flush rAF 队列中可能残留的文本增量
+        if (rafIdRef.current) {
+          cancelAnimationFrame(rafIdRef.current);
+          rafIdRef.current = 0;
+        }
+        {
+          const remaining = pendingTextRef.current;
+          pendingTextRef.current = "";
+          currentTargetIdRef.current = "";
+          updateAssistant(targetBlockId, (b) => {
+            b.thinking = false;
+            if (remaining) {
+              b.text = b.text + remaining;
+            }
+          });
+        }
+        break;
       default:
-        break; // end / ignore
+        break; // ignore 等其它事件
     }
   }
 
   /* ---------------- 发送 ---------------- */
 
   async function send() {
-    if (sending) return;
+    // 如果已有流在运行（文本已到达但 Agent 仍在后台处理），先中止旧流
+    if (streamAbortRef.current) {
+      userCancelledRef.current = true;
+      abortCurrentStream();
+      // 移除旧流未完成的助手气泡
+      if (activeStreamIdRef.current) {
+        const oldId = activeStreamIdRef.current;
+        setBlocks((prev) => prev.filter((b) => b.id !== oldId));
+      }
+    }
     const content = input.trim();
     if (!content && pendingFiles.length === 0) return;
 
@@ -538,8 +650,13 @@ export default function ChatView() {
 
     const assistantId = nextId();
     const assistantTime = new Date().toISOString();
-    appendBlock({ id: assistantId, kind: "assistant", text: "", thinking: true, createTime: assistantTime });
+    appendBlock({ id: assistantId, kind: "assistant", text: "", thinking: true, thinkingText: "", thinkingExpanded: false, createTime: assistantTime });
+    activeStreamIdRef.current = assistantId;
     setSending(true);
+    // SSE 流式请求超时保护：2 分钟无响应自动中止，避免 UI 永久卡在「回复中…」
+    const streamController = new AbortController();
+    streamAbortRef.current = streamController; // 存储到 ref，切换会话时可中止
+    const streamTimeout = setTimeout(() => streamController.abort(), 120_000);
     try {
       await api.stream(
         "/api/chat/stream",
@@ -550,19 +667,41 @@ export default function ChatView() {
           pipelineCode: pipelineCode || null,
           attachments: attachments.length ? attachments : null,
         },
-        (event) => handleEvent(event, assistantId)
+        (event) => handleEvent(event, assistantId),
+        streamController.signal
       );
     } catch (e) {
-      // 仅在气泡内展示一次：与 error 事件路径一致，避免重复提示（此前气泡 + toast 双份）
-      const message = e instanceof Error ? e.message : "对话执行失败";
-      updateAssistant(assistantId, (b) => {
-        b.thinking = false;
-        b.error = true;
-        b.text = message;
-      });
+      // 已被 cancelStream 同步清理 → 跳过 catch 处理
+      if (cancelledIdsRef.current.has(assistantId)) {
+        // no-op
+      } else if (e instanceof DOMException && e.name === "AbortError") {
+        // 切换会话导致的中止：气泡已由 openSession/newSession 处理
+      } else {
+        // 其他错误：在气泡内展示错误信息
+        const message = e instanceof Error ? e.message : "对话执行失败";
+        updateAssistant(assistantId, (b) => {
+          b.thinking = false;
+          b.error = true;
+          b.text = message;
+        });
+      }
     } finally {
+      clearTimeout(streamTimeout);
+      streamAbortRef.current = null;
+      // 已被 cancelStream 同步清理 → 仅做基础收尾
+      if (cancelledIdsRef.current.has(assistantId)) {
+        cancelledIdsRef.current.delete(assistantId);
+        userCancelledRef.current = false;
+      } else if (activeStreamIdRef.current === assistantId) {
+        // 正常结束：清 thinking 标记
+        updateAssistant(assistantId, (b) => {
+          b.thinking = false;
+        });
+        activeStreamIdRef.current = null;
+      }
       setSending(false);
-      loadSessions();
+      // 延迟加载会话列表，确保按钮状态先更新
+      setTimeout(loadSessions, 0);
     }
   }
 
@@ -578,37 +717,69 @@ export default function ChatView() {
     );
     const assistantId = nextId();
     const confirmTime = new Date().toISOString();
-    appendBlock({ id: assistantId, kind: "assistant", text: "", thinking: true, createTime: confirmTime });
+    appendBlock({ id: assistantId, kind: "assistant", text: "", thinking: true, thinkingText: "", thinkingExpanded: false, createTime: confirmTime });
+    activeStreamIdRef.current = assistantId;
     setSending(true);
+    const confirmController = new AbortController();
+    streamAbortRef.current = confirmController; // 存储到 ref，切换会话时可中止
+    const confirmTimeout = setTimeout(() => confirmController.abort(), 120_000);
     try {
       await api.stream(
         "/api/chat/confirm",
         { sessionId: hitlBlock.sessionId, approved },
-        (event) => handleEvent(event, assistantId)
+        (event) => handleEvent(event, assistantId),
+        confirmController.signal
       );
     } catch (e) {
-      // 仅在气泡内展示一次：与 error 事件路径一致，避免重复提示（此前过程行 + toast 双份）
-      const message = e instanceof Error ? e.message : "恢复执行失败";
-      updateAssistant(assistantId, (b) => {
-        b.thinking = false;
-        b.error = true;
-        b.text = message;
-      });
+      // 已被 cancelStream 同步清理 → 跳过
+      if (cancelledIdsRef.current.has(assistantId)) {
+        // no-op
+      } else if (e instanceof DOMException && e.name === "AbortError") {
+        // 切换会话导致的中止
+      } else {
+        const message = e instanceof Error ? e.message : "恢复执行失败";
+        updateAssistant(assistantId, (b) => {
+          b.thinking = false;
+          b.error = true;
+          b.text = message;
+        });
+      }
     } finally {
+      clearTimeout(confirmTimeout);
+      streamAbortRef.current = null;
+      // 已被 cancelStream 同步清理 → 仅做基础收尾
+      if (cancelledIdsRef.current.has(assistantId)) {
+        cancelledIdsRef.current.delete(assistantId);
+        userCancelledRef.current = false;
+      } else if (activeStreamIdRef.current === assistantId) {
+        updateAssistant(assistantId, (b) => {
+          b.thinking = false;
+        });
+        activeStreamIdRef.current = null;
+      }
       setSending(false);
-      loadSessions();
+      // 延迟加载会话列表，确保按钮状态先更新
+      setTimeout(loadSessions, 0);
     }
   }
 
   /* ---------------- 会话操作 ---------------- */
 
   function newSession() {
+    // 中止正在进行的 SSE 流，清理 rAF 缓冲区
+    abortCurrentStream();
+    setSending(false);
     setCurrentSessionId(null);
     setBlocks([]);
   }
 
   /** 打开历史会话：从后端拉取已入库的聊天记录回看 */
   async function openSession(sessionId: string) {
+    // 如果打开的是当前会话，不做任何操作
+    if (sessionId === currentSessionId) return;
+    // 中止正在进行的 SSE 流，清理 rAF 缓冲区
+    abortCurrentStream();
+    setSending(false);
     setCurrentSessionId(sessionId);
     setBlocks([
       {
@@ -616,6 +787,8 @@ export default function ChatView() {
         kind: "assistant",
         text: "—— 正在加载历史聊天记录… ——",
         thinking: false,
+        thinkingText: "",
+        thinkingExpanded: false,
       },
     ]);
     try {
@@ -630,6 +803,8 @@ export default function ChatView() {
             kind: "assistant",
             text: "—— 该会话暂无已入库的历史消息，继续对话吧 ——",
             thinking: false,
+            thinkingText: "",
+            thinkingExpanded: false,
           },
         ]);
         return;
@@ -1180,8 +1355,8 @@ export default function ChatView() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
-                  // Enter 发送（Shift+Enter 换行）
-                  if (e.key === "Enter" && !e.shiftKey) {
+                  // Enter 发送（Shift+Enter 换行）；回复中时 Enter 正常换行
+                  if (e.key === "Enter" && !e.shiftKey && !sending) {
                     e.preventDefault();
                     send();
                   }
@@ -1192,11 +1367,17 @@ export default function ChatView() {
                   }
                 }}
               />
-              <Button onClick={send} disabled={sending} className="gap-1 shrink-0">
-                {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                <span className="hidden sm:inline">{sending ? "回复中…" : "发送"}</span>
-                <span className="sm:hidden">{sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}</span>
-              </Button>
+              {sending ? (
+                <Button onClick={cancelStream} variant="outline" className="gap-1 shrink-0 border-red-200 text-red-600 hover:bg-red-50">
+                  <Square className="h-3.5 w-3.5 fill-current" />
+                  <span className="hidden sm:inline">取消</span>
+                </Button>
+              ) : (
+                <Button onClick={send} className="gap-1 shrink-0">
+                  <Send className="h-4 w-4" />
+                  <span className="hidden sm:inline">发送</span>
+                </Button>
+              )}
             </div>
           </div>
         </div>
@@ -1293,7 +1474,7 @@ const BlockView = React.memo(function BlockView({
   if (block.kind === "user") {
     return (
       <div className="flex justify-end gap-2">
-        <div className="group relative max-w-[90%] lg:max-w-[80%] space-y-1 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-500 px-3 py-2 pl-8 text-sm text-white shadow-sm">
+        <div className="group relative max-w-[90%] lg:max-w-[80%] space-y-1 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-500 px-4 py-2.5 pl-8 text-sm text-white shadow-sm">
           {/* 复制按钮：气泡内左上角，hover 显示 */}
           <button
             onClick={() => copyToClipboard(block.text, "消息")}
@@ -1343,7 +1524,7 @@ const BlockView = React.memo(function BlockView({
             </p>
           )}
         </div>
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-indigo-100">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-indigo-100 shadow-sm">
           <User className="h-4 w-4 text-indigo-600" />
         </div>
       </div>
@@ -1356,10 +1537,10 @@ const BlockView = React.memo(function BlockView({
     if (block.error) {
       return (
         <div className="flex gap-2">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-500">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-500 shadow-sm">
             <Bot className="h-4 w-4 text-white" />
           </div>
-          <div className="group relative max-w-[90%] lg:max-w-[80%] rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 shadow-sm">
+          <div className="group relative max-w-[90%] lg:max-w-[80%] rounded-2xl border border-rose-100 bg-rose-50 px-4 py-3 shadow-sm">
             {/* 复制按钮：气泡内右上角，hover 显示 */}
             <button
               onClick={() => copyToClipboard(block.text, "错误信息")}
@@ -1390,71 +1571,105 @@ const BlockView = React.memo(function BlockView({
     }
     return (
       <div className="flex gap-2">
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-500">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-500 shadow-sm">
           <Bot className="h-4 w-4 text-white" />
         </div>
-        <div className="group relative max-w-[90%] lg:max-w-[80%] rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm">
-          {/* 复制按钮：气泡内右上角，hover 显示 */}
-          <button
-            onClick={() => copyToClipboard(stripMarkdown(block.text || ""), "回复")}
-            className="absolute right-2 top-2 z-10 rounded p-1 opacity-0 transition-opacity hover:bg-slate-100 group-hover:opacity-100"
-            title="复制回复"
-          >
-            <Copy className="h-3.5 w-3.5 text-muted-foreground" />
-          </button>
-          
-          {/* 工具调用折叠面板（思考过程中或完成后展示） */}
+        <div className="group relative max-w-[90%] lg:max-w-[80%]">
+          {/* 工具调用标签（ChatGPT 风格：紧凑 inline 标签） */}
           {block.toolCalls && block.toolCalls.length > 0 && (
-            <details className="mb-2 group/tool">
-              <summary className="cursor-pointer list-none flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors">
-                <ChevronDown className="h-3.5 w-3.5 shrink-0 transition-transform group-open/tool:rotate-180" />
-                <span>{block.toolCalls.length} 个工具调用</span>
+            <details className="group/tool mb-2">
+              <summary className="cursor-pointer list-none inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-[11px] text-slate-500 hover:bg-slate-200 transition-colors">
+                <Wrench className="h-3 w-3" />
+                <span>{block.toolCalls.length} 个工具</span>
+                <ChevronDown className="h-3 w-3 transition-transform group-open/tool:rotate-180" />
               </summary>
-              <div className="mt-2 space-y-1.5 pl-5 border-l-2 border-indigo-200">
+              <div className="mt-1.5 ml-1 flex flex-wrap gap-1.5">
                 {block.toolCalls.map((tool, idx) => (
-                  <div key={idx} className="flex items-center gap-2 text-xs">
-                    {tool.status === 'running' && <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-500" />}
-                    {tool.status === 'success' && <Check className="h-3.5 w-3.5 text-emerald-500" />}
-                    {tool.status === 'error' && <X className="h-3.5 w-3.5 text-rose-500" />}
-                    <span className={tool.status === 'running' ? 'text-indigo-600' : tool.status === 'error' ? 'text-rose-600' : 'text-muted-foreground'}>
-                      {tool.name}
-                    </span>
-                  </div>
+                  <span
+                    key={idx}
+                    className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] ${
+                      tool.status === 'running'
+                        ? 'bg-indigo-50 text-indigo-600'
+                        : tool.status === 'error'
+                        ? 'bg-rose-50 text-rose-600'
+                        : 'bg-emerald-50 text-emerald-600'
+                    }`}
+                  >
+                    {tool.status === 'running' && <Loader2 className="h-2.5 w-2.5 animate-spin" />}
+                    {tool.status === 'success' && <Check className="h-2.5 w-2.5" />}
+                    {tool.status === 'error' && <X className="h-2.5 w-2.5" />}
+                    {tool.name}
+                  </span>
                 ))}
               </div>
             </details>
           )}
 
-          {/* 表格工具栏：检测到 Markdown 表格时展示导出/预览按钮 */}
-          {!block.thinking && hasMarkdownTable(block.text || "") && (
-            <div className="flex items-center gap-1.5 mb-2 border-t border-dashed border-slate-200 pt-2">
-              <Table className="h-3.5 w-3.5 text-slate-400" />
-              <span className="text-xs text-slate-400">检测到表格</span>
-              <button
-                onClick={() => exportTableAsCSV(extractMarkdownTables(block.text || ""), "客户开发结果.csv")}
-                className="inline-flex items-center gap-1 rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600 transition-colors hover:bg-slate-200"
-              >
-                <Download className="h-3 w-3" /> 导出CSV
-              </button>
-              <button
-                onClick={() => onPreviewTable?.(extractMarkdownTables(block.text || ""))}
-                className="inline-flex items-center gap-1 rounded bg-indigo-50 px-2 py-0.5 text-xs text-indigo-600 transition-colors hover:bg-indigo-100"
-              >
-                <ZoomIn className="h-3 w-3" /> 预览表格
-              </button>
-            </div>
+          {/* 思考过程（Claude 风格：左侧细线 + 浅色背景） */}
+          {block.thinkingText && (
+            <details
+              className="group/think mb-3"
+              open={block.thinking}
+            >
+              <summary className="cursor-pointer list-none flex items-center gap-1.5 text-[11px] text-slate-400 hover:text-slate-600 transition-colors mb-1.5">
+                <Brain className="h-3.5 w-3.5" />
+                <span>{block.thinking ? "思考中…" : "思考过程"}</span>
+                {block.thinking && <Loader2 className="h-3 w-3 animate-spin" />}
+                <ChevronDown className="h-3 w-3 transition-transform group-open/think:rotate-180" />
+              </summary>
+              <div className="border-l-2 border-slate-200 pl-3 text-xs text-slate-500 whitespace-pre-wrap break-words max-h-48 overflow-y-auto leading-relaxed">
+                {block.thinkingText}
+              </div>
+            </details>
           )}
 
-          {block.thinking ? (
-            <span className="text-muted-foreground">思考中…</span>
-          ) : (
-            <Markdown content={block.text || ""} />
-          )}
-          {/* 回复时间 */}
-          {!block.thinking && block.createTime && (
-            <p className="text-[10px] text-muted-foreground/70 text-right mt-1">
-              {formatTime(block.createTime)}
-            </p>
+          {/* 主回复气泡：有文本、思考结束、或有思考过程时显示 */}
+          {(block.text || !block.thinking || block.thinkingText || block.thinking) && (
+            <div className="relative rounded-2xl border border-slate-200/60 bg-white px-4 py-3 text-sm shadow-sm">
+              {/* 复制按钮：气泡内右上角，hover 显示 */}
+              <button
+                onClick={() => copyToClipboard(stripMarkdown(block.text || ""), "回复")}
+                className="absolute right-2 top-2 z-10 rounded p-1 opacity-0 transition-opacity hover:bg-slate-100 group-hover:opacity-100"
+                title="复制回复"
+              >
+                <Copy className="h-3.5 w-3.5 text-muted-foreground" />
+              </button>
+
+              {/* 表格工具栏（浮动小条） */}
+              {!block.thinking && hasMarkdownTable(block.text || "") && (
+                <div className="flex items-center gap-1.5 mb-2 pb-2 border-b border-dashed border-slate-200">
+                  <Table className="h-3 w-3 text-slate-400" />
+                  <span className="text-[11px] text-slate-400">表格</span>
+                  <div className="ml-auto flex items-center gap-1">
+                    <button
+                      onClick={() => exportTableAsCSV(extractMarkdownTables(block.text || ""), "客户开发结果.csv")}
+                      className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] text-slate-500 hover:bg-slate-100 transition-colors"
+                    >
+                      <Download className="h-2.5 w-2.5" /> 导出
+                    </button>
+                    <button
+                      onClick={() => onPreviewTable?.(extractMarkdownTables(block.text || ""))}
+                      className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] text-indigo-500 hover:bg-indigo-50 transition-colors"
+                    >
+                      <ZoomIn className="h-2.5 w-2.5" /> 预览
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {block.text ? (
+                <Markdown content={block.text} />
+              ) : (
+                <span className="text-muted-foreground">思考中…</span>
+              )}
+
+              {/* 回复时间 */}
+              {!block.thinking && block.createTime && (
+                <p className="text-[10px] text-muted-foreground/50 text-right mt-2">
+                  {formatTime(block.createTime)}
+                </p>
+              )}
+            </div>
           )}
         </div>
       </div>

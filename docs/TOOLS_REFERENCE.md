@@ -47,11 +47,11 @@
 
 ### 2. 联网搜索工具 🔍
 
-#### `web_search` / `bing_search`
-- **描述**:联网搜索网页信息,返回标题、链接和摘要
+#### `search`
+- **描述**:联网搜索网页信息，支持多引擎多级降级（Tavily → Brave → Bing → SearXNG → DuckDuckGo）
 - **参数**:
   - `query`:搜索关键词
-  - `num_results`:返回结果数量(默认5,最大8)
+  - `num_results`:返回结果数量（默认5，最大8）
 - **示例**:
   ```
   请搜索 A股今天开盘情况
@@ -59,13 +59,50 @@
   ```
 
 **注意**:
-- DuckDuckGo 需要配置 HTTP 代理(中国大陆网络环境)
-- Bing Search 需要配置 API Key(Azure 订阅)
+- 不配 API Key 时自动跳过对应引擎，最终兑底 DuckDuckGo
+- DuckDuckGo 需要配置 HTTP 代理（中国大陆网络环境）
 - 详见 [PROXY_CONFIG.md](./PROXY_CONFIG.md) 和 [SEARCH_OPTIONS_COMPARISON.md](./SEARCH_OPTIONS_COMPARISON.md)
 
 ---
 
-### 3. 系统与时间工具 ⏰
+### 3. 浏览器自动化工具 🌐
+
+#### `browse_url`
+- **描述**:访问指定 URL，获取页面主要内容（纯文本）
+- **参数**:
+  - `url`:要访问的网页地址（仅支持 HTTP/HTTPS）
+- **示例**:
+  ```
+  请浏览 https://example.com 并总结内容
+  ```
+
+#### `get_page_title`
+- **描述**:获取指定 URL 的网页标题
+- **参数**:
+  - `url`:要获取标题的网页地址
+- **示例**:
+  ```
+  这个网页的标题是什么？https://example.com
+  ```
+
+#### `extract_links`
+- **描述**:提取页面中的所有超链接，返回链接文本和 URL
+- **参数**:
+  - `url`:要提取链接的网页地址
+- **示例**:
+  ```
+  请提取这个页面的所有链接
+  ```
+
+**安全限制**:
+- 仅支持 HTTP/HTTPS 协议
+- 请求超时 30 秒
+- 内容上限 2MB
+- 内容截取前 5000 字符
+
+---
+
+### 4. 系统与时间工具 ⏰
 
 #### `get_current_time`
 - **描述**:获取当前系统时间(包含时区信息)
@@ -277,10 +314,11 @@ Agent 可以组合多个工具来完成复杂任务:
 用户: 帮我规划一下从北京到上海的行程
 
 Agent 可能使用的工具:
-1. web_search: 搜索高铁时刻表
-2. get_current_time: 获取当前时间
-3. add_days_to_date: 计算出发日期
-4. save_note: 保存行程计划到笔记
+1. search: 搜索高铁时刻表
+2. browse_url: 查看官网详情
+3. get_current_time: 获取当前时间
+4. add_days_to_date: 计算出发日期
+5. save_note: 保存行程计划到笔记
 ```
 
 ### 2. 明确参数格式
@@ -388,15 +426,19 @@ if (capabilityService.isToolEnabled(CapabilityService.TOOL_MY_CUSTOM, tenantId, 
 
 ## 更新日志
 
+### 2026-09-02
+- ✅ 新增 BrowserTools: 浏览器自动化（browse_url / get_page_title / extract_links）
+- ✅ 搜索工具统一为 `search`，支持 Tavily/Brave/Bing/SearXNG/DuckDuckGo 多级降级
+
 ### 2026-08-26
 - ✅ 新增 SystemTools: 时间查询、日期计算、UUID 生成、系统信息
 - ✅ 新增 MathTools: 数学计算、哈希函数、Base64 编解码、单位换算、密码生成
 
 ### 未来计划
-- [ ] 文本处理工具(翻译、摘要、JSON/XML 格式化)
-- [ ] 代码相关工具(正则测试、语法检查)
-- [ ] 网络工具(IP 查询、URL 解析)
-- [ ] 实用小工具(QR Code 生成、颜色转换)
+- [ ] 文本处理工具（翻译、摘要、JSON/XML 格式化）
+- [ ] 代码相关工具（正则测试、语法检查）
+- [ ] 网络工具（IP 查询、URL 解析）
+- [ ] 实用小工具（QR Code 生成、颜色转换）
 
 ---
 
