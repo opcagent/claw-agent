@@ -155,7 +155,7 @@ public class ToolController {
      * @return 操作结果
      */
     @Operation(summary = "批量启用", description = "批量启用多个工具集")
-    @PostMapping("/batch-enable")
+    @PostMapping("/batchEnable")
     public Mono<Result<Void>> batchEnable(@RequestBody List<String> codes) {
         return Mono.fromCallable(() -> {
             int successCount = 0;
@@ -180,7 +180,7 @@ public class ToolController {
      * @return 操作结果
      */
     @Operation(summary = "批量禁用", description = "批量禁用多个工具集")
-    @PostMapping("/batch-disable")
+    @PostMapping("/batchDisable")
     public Mono<Result<Void>> batchDisable(@RequestBody List<String> codes) {
         return Mono.fromCallable(() -> {
             int successCount = 0;

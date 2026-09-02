@@ -23,6 +23,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import org.springframework.util.StringUtils;
 
@@ -99,7 +100,7 @@ public class ConfigController {
 
     /** 已知运行参数目录（键/说明/默认值/可选值），供管理页「快速添加」 */
     @Operation(summary = "参数目录", description = "已知运行参数目录（键/说明/默认值/可选值），供管理页快速添加")
-    @GetMapping("/param-keys")
+    @GetMapping("/paramKeys")
     public Mono<Result<List<ParamKeyInfo>>> listParamKeys() {
         return ReactiveSupport.call(user -> configService.listParamKeys());
     }
@@ -112,7 +113,7 @@ public class ConfigController {
      * 敏感项（JWT 密钥）与部署内部路径（存储目录/工作区）不下发，避免暴露项目结构。
      */
     @Operation(summary = "系统属性", description = "系统运行时属性（JVM/OS/内存等），仅管理员可查看")
-    @GetMapping("/system-props")
+    @GetMapping("/systemProps")
     public Mono<Result<SystemProps>> systemProps() {
         return ReactiveSupport.call(user -> SystemProps.from(properties));
     }
@@ -124,9 +125,12 @@ public class ConfigController {
      * 升级时更新配置即可触达用户，无需新增数据库表。
      */
     @Operation(summary = "版本信息", description = "获取平台版本信息（放行接口，无需登录）")
-    @GetMapping("/version-info")
+    @GetMapping("/versionInfo")
+    @PreAuthorize("permitAll()")
     public Mono<Result<VersionInfo>> versionInfo() {
-        return ReactiveSupport.call(user -> VersionInfo.from(properties));
+        // 登录页也需要展示品牌名，不能依赖登录用户，直接返回配置
+        return Mono.fromCallable(() -> Result.ok(VersionInfo.from(properties)))
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     // ------------------------------------------------------------
@@ -135,7 +139,7 @@ public class ConfigController {
 
     /** 查询某作用域下的搜索引擎配置（API Key 脱敏回显） */
     @Operation(summary = "搜索引擎配置", description = "查询某作用域下的搜索引擎配置（API Key 脱敏）")
-    @GetMapping("/search-configs")
+    @GetMapping("/searchConfigs")
     public Mono<Result<List<AgentConfigItem>>> listSearchConfigs(@RequestParam String scope) {
         return ReactiveSupport.call(user -> {
             checkScopePermission(user, scope);
@@ -146,7 +150,7 @@ public class ConfigController {
 
     /** 保存搜索引擎配置（API Key 加密存储；空值或脱敏值保留原密钥） */
     @Operation(summary = "保存搜索引擎配置", description = "保存搜索引擎配置（API Key 加密存储）")
-    @PostMapping("/search-configs")
+    @PostMapping("/searchConfigs")
     public Mono<Result<Void>> saveSearchConfig(@RequestBody SearchConfigRequest request) {
         return ReactiveSupport.run(MODULE, OperType.UPDATE, "保存搜索配置", user -> {
             checkScopePermission(user, request.getScope());

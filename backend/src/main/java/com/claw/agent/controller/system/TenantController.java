@@ -62,7 +62,7 @@ public class TenantController {
 
     /** 新增租户并创建初始管理员（推荐方式） */
     @Operation(summary = "新增租户并创建管理员", description = "新增租户并创建初始管理员（推荐方式）")
-    @PostMapping("/with-admin")
+    @PostMapping("/withAdmin")
     public Mono<Result<Void>> addWithAdmin(@Valid @RequestBody TenantCreateWithAdminRequest request) {
         return ReactiveSupport.run(MODULE, OperType.CREATE, "新增租户并创建管理员",
                 u -> tenantService.addTenantWithAdmin(u, request));

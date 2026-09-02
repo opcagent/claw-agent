@@ -97,14 +97,14 @@ public class CapabilityController {
 
     /** 可开关工具目录（键/名称/说明/类型） */
     @Operation(summary = "工具目录", description = "查询可开关的工具目录（键/名称/说明/类型）")
-    @GetMapping("/tool-keys")
+    @GetMapping("/toolKeys")
     public Mono<Result<List<ToolKeyInfo>>> toolKeys() {
         return ReactiveSupport.call(user -> capabilityService.listToolKeys());
     }
 
     /** 查询某作用域下显式登记的工具开关 */
     @Operation(summary = "工具开关配置", description = "查询某作用域下显式登记的工具开关")
-    @GetMapping("/tool-configs")
+    @GetMapping("/toolConfigs")
     public Mono<Result<List<ToolConfig>>> listToolConfigs(@RequestParam String scope) {
         return ReactiveSupport.call(user -> {
             checkScopePermission(user, scope);
@@ -115,7 +115,7 @@ public class CapabilityController {
 
     /** 保存工具开关（启用/禁用） */
     @Operation(summary = "保存工具开关", description = "保存工具启用/禁用开关")
-    @PostMapping("/tool-config")
+    @PostMapping("/toolConfig")
     public Mono<Result<Void>> saveToolConfig(@RequestBody ToolConfigRequest request) {
         return ReactiveSupport.run(MODULE, OperType.UPDATE, "保存工具开关", user -> {
             checkScopePermission(user, request.getScope());
@@ -142,7 +142,7 @@ public class CapabilityController {
 
     /** 切换目标用户某技能的启停（写入 USER 作用域；本人或管理员） */
     @Operation(summary = "切换技能启停", description = "切换目标用户某技能的启用/禁用状态")
-    @PostMapping("/skill-toggle")
+    @PostMapping("/skillToggle")
     public Mono<Result<Void>> toggleSkill(@RequestBody SkillToggleRequest request) {
         return ReactiveSupport.run(MODULE, OperType.UPDATE, "切换技能启停", user -> {
             User target = resolveTarget(user, request.getUsername());

@@ -110,7 +110,7 @@ public class AuthController {
 
     /** 本人最近登录记录（含失败，时间倒序；条数服务端限幅） */
     @Operation(summary = "最近登录记录", description = "查看本人最近登录记录（含失败），时间倒序")
-    @GetMapping("/login-logs")
+    @GetMapping("/loginLogs")
     public Mono<Result<List<LoginLog>>> myLoginLogs(
             @RequestParam(name = "limit", defaultValue = "10") int limit) {
         return ReactiveSupport.call(u -> authService.myLoginLogs(u, limit));

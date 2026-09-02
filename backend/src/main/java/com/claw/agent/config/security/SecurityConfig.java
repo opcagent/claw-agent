@@ -85,7 +85,7 @@ public class SecurityConfig {
                 }))
                 .authorizeExchange(exchange -> exchange
                         // 放行：登录 + 版本信息（登录页未登录也需展示品牌名）+ 渠道 Webhook（外部平台回调，无 JWT）
-                        .pathMatchers("/api/auth/login", "/api/config/version-info", "/api/webhook/**").permitAll()
+                        .pathMatchers("/api/auth/login", "/api/config/versionInfo", "/api/webhook/**").permitAll()
                         // 放行：OpenAPI 文档 + Swagger UI（仅开发环境开启，生产环境应关闭 springdoc）
                         .pathMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                         // 管理端点：租户管理员及以上（角色键 tenant_admin / admin → ROLE_TENANT_ADMIN / ROLE_ADMIN）

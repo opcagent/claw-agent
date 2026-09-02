@@ -82,7 +82,7 @@ public class ScheduledTaskController {
 
     /** 立即执行一次 */
     @Operation(summary = "立即执行", description = "立即执行一次定时任务")
-    @PostMapping("/{id}/run-now")
+    @PostMapping("/{id}/runNow")
     public Mono<Result<String>> runNow(@PathVariable Long id) {
         return ReactiveSupport.call(u -> scheduledTaskService.runNow(u, id));
     }

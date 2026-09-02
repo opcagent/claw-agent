@@ -77,7 +77,7 @@ public class UserChannelController {
 
     /** 同步群组成员（从渠道 API 拉取最新成员列表） */
     @Operation(summary = "同步群组成员", description = "从渠道 API 拉取最新群成员列表")
-    @PostMapping("/{id}/sync-members")
+    @PostMapping("/{id}/syncMembers")
     public Mono<Result<Void>> syncMembers(@PathVariable Long id) {
         return ReactiveSupport.run(MODULE, OperType.UPDATE, "同步群组成员",
                 u -> userChannelService.syncGroupMembers(u, id));
