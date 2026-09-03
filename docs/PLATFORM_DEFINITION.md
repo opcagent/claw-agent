@@ -505,8 +505,9 @@ CREATE TABLE token_usage_summary (
 | **deepseek** | OpenAI 兼容 | deepseek-chat | DeepSeek 官方 |
 | **openai** | OpenAI 兼容 | gpt-4.1-mini | OpenAI/Kimi/vLLM |
 | **ollama** | Ollama | qwen2.5:7b | 本地运行,零成本 |
-| **groq** | OpenAI 兼容 | llama3.1-70b | 极速推理 |
-| **huggingface** | OpenAI 兼容 | mistral-7b | HuggingFace Hub |
+| **anthropic** | Anthropic | claude-sonnet-4-20250514 | Claude 3.5/3.7/4 系列 |
+| **gemini** | Gemini | gemini-2.0-flash | Google Gemini 2.0/2.5 |
+| **volcengine** | OpenAI 兼容 | doubao-seed-2-1-pro | 火山方舟/豆包 |
 
 ### 5.10 MCP 服务器管理
 
@@ -754,7 +755,19 @@ data: {"replyId":"abc123"}
 | V32 | `V32__token_usage_tracking.sql` | Token 统计系统 |
 | V33 | `V33__add_free_mcp_servers.sql` | 免费 MCP 服务器配置 |
 | V34 | `V34__token_usage_menu.sql` | Token 统计菜单 |
-| V35 | `V35__add_free_model_providers.sql` | 免费模型提供商配置 |
+| V35 | `V35__email_config_complete.sql` | 邮件配置完善 |
+| V40 | `V40__baidu_ocr_config.sql` | 百度 OCR 配置 |
+| V41 | `V41__quick_phrase.sql` | 快捷指令 |
+| V42 | `V42__session_summary.sql` | 会话摘要（跨会话记忆） |
+| V43 | `V43__preset_marketplace.sql` | 预设模板市场 |
+| V44 | `V44__scheduled_task.sql` | 定时任务 |
+| V45 | `V45__foreign_trade_pipeline.sql` | 外贸客户开发流水线 |
+| V47 | `V47__volcengine_provider.sql` | 火山方舟/豆包模型提供商 |
+| V48 | `V48__user_channel.sql` | 用户渠道绑定 |
+| V49 | `V49__session_archive.sql` | 会话归档 |
+| V50 | `V50__chat_message_composite_index.sql` | 聊天消息复合索引 |
+| V51 | `V51__dict_provider_and_log_labels.sql` | 字典提供商与日志标签 |
+| V52 | `V52__add_glm52_model.sql` | GLM 5.2 模型 |
 
 ---
 
@@ -907,9 +920,7 @@ public class WeatherTools {
 
 ### Q2: 如何实现自动 Token 记录?
 
-**A**: 当前版本需手动调用 `TokenUsageService.recordUsage()`,后续将实现 Middleware 自动拦截。临时方案:
-1. 在 `AgentService.doChat()` 的 `end` 事件中提取 usage
-2. 调用 `tokenUsageService.recordUsage(...)`
+**A**: ✅ 已实现自动记录。通过 `ModelCallEndEvent` 事件驱动，模型调用时自动提取 `ChatUsage` 异步落库，无需手动干预。
 
 ### Q3: 如何配置免费模型?
 

@@ -297,10 +297,13 @@ netstat -ano | findstr ":11434"
 
 ## 🔄 后续扩展
 
+### 已接入的模型提供商
+- ✅ **Anthropic Claude**: claude-sonnet-4-20250514，Claude 3.5/3.7/4 系列
+- ✅ **Google Gemini**: gemini-2.0-flash，Google Gemini 2.0/2.5
+- ✅ **火山方舟/豆包**: doubao-seed-2-1-pro，火山方舟 OpenAI 兼容协议
+
 ### 计划添加的免费模型
 - **Cohere**: 每月 100 次免费调用 (文本嵌入/分类)
-- **Anthropic Claude**: 新用户 $5 赠金 (约等于 100 万次 token)
-- **Google Gemini**: 免费层每分钟 60 RPM
 - **Azure OpenAI**: 新用户 $200 赠金 (首月)
 
 ### 自定义模型接入

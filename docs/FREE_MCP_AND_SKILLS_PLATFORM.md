@@ -498,20 +498,19 @@ public class PlatformResourceController {
 
 ## 🎯 下一步行动
 
-### 立即执行 (今天)
+### 已完成 ✅
 1. ✅ 阅读本方案,确认优先级
-2. ⏳ 选择首批安装的 3 个 MCP 服务器 (建议: Chrome DevTools + GitHub + SQLite)
-3. ⏳ 创建 V33 Flyway 迁移脚本
+2. ✅ 选择并配置 5 个免费 MCP 服务器 (Git + GitHub + Chrome DevTools + SQLite + PostgreSQL)
+3. ✅ 创建 V33 Flyway 迁移脚本
+4. ✅ 开发 3 个 Skills (code-review + data-analysis + regex-tester)
+5. ✅ 完整测试所有 MCP 服务器
+6. ✅ 编写用户文档 (PROXY_CONFIG.md / TOOLS_REFERENCE.md 等)
 
-### 本周完成
-1. ⏳ 实现 MCP 服务器动态注册 API
-2. ⏳ 开发 2 个 Skills (code-review + data-analysis)
-3. ⏳ 前端 MCP 管理界面原型
-
-### 下周完成
-1. ⏳ 完整测试所有 MCP 服务器
-2. ⏳ 编写用户文档 (如何配置 API Key)
+### 待完成
+1. ⏳ 实现 MCP 服务器动态注册 API（当前通过数据库直接配置）
+2. ⏳ 前端 MCP 管理界面增强（推荐列表、一键安装）
 3. ⏳ 性能优化 (MCP 进程池、缓存机制)
+4. ⏳ 技能调用流程实际验证
 
 ---
 

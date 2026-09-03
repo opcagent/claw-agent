@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/Spring%20Boot-3.5-green.svg" alt="Spring Boot" />
   <img src="https://img.shields.io/badge/Next.js-16-black.svg" alt="Next.js" />
   <img src="https://img.shields.io/badge/AgentScope-2.0-purple.svg" alt="AgentScope" />
-  <img src="https://img.shields.io/github/stars/KittyMi/claw-agent?style=social" alt="GitHub Stars" />
+  <img src="https://img.shields.io/github/stars/opcagent/claw-agent?style=social" alt="GitHub Stars" />
 </p>
 
 ---
@@ -188,7 +188,7 @@ $env:MYSQL_HOST="192.168.1.100"
 - **流水记录表**：`token_usage_log` 记录每次模型调用（prompt_tokens/completion_tokens/total_tokens）
 - **月度汇总表**：`token_usage_summary` 按月聚合统计，数据库触发器自动维护
 - **管理员视图**：租户内用户 Token 使用排行（仅平台管理员/租户管理员可见）
-- ⚠️ **已知限制**：自动拦截逻辑未实现，当前通过测试接口 `POST /api/token-usage/test-record` 手动验证链路
+- ✅ **自动记录**：通过 `ModelCallEndEvent` 事件驱动，模型调用时自动提取 `ChatUsage` 异步落库
 
 #### 5. 模型提供商配置 (⭐⭐⭐⭐⭐)
 - **三级作用域**：PLATFORM (平台级) / TENANT (租户级) / USER (用户级)
@@ -211,10 +211,10 @@ $env:MYSQL_HOST="192.168.1.100"
 
 ### ⚠️ 部分实现/待完善
 
-- **在线监控** (🚧 开发中)：简化实现（内存 Map 记录），无 WebSocket 实时推送
-- **Skills 技能库** (❌ 规划中)：目录未创建，需初始化 `skills/` 目录并编写 SKILL.md
-- **子 Agent 委派** (️ 部分实现)：框架支持，未充分验证复杂任务拆解效果
-- **Token 自动拦截** (⚠️ 部分实现)：测试接口可用，自动提取 usage 需查阅 AgentScope 2.0 官方文档
+- **在线监控** (⭐⭐⭐)：前端页面已实现，但无 WebSocket 实时推送，需手动刷新
+- **Skills 技能库** (⭐⭐⭐)：已创建 `skills/` 目录并编写 SKILL.md（code-review/data-analysis/regex-tester），未充分验证调用流程
+- **子 Agent 委派** (️⭐⭐⭐)：框架支持，未充分验证复杂任务拆解效果
+- **Token 配额管理** (❌ 规划中)：自动记录已完成，但月度上限、超额告警尚未实现
 
 ## Docker 部署（可选）
 
@@ -477,7 +477,7 @@ See [.env.example](.env.example) for complete template.
 - **Usage log table**: `token_usage_log` records each model call (prompt_tokens/completion_tokens/total_tokens)
 - **Monthly summary table**: `token_usage_summary` monthly aggregation, database trigger auto-maintains
 - **Admin view**: User Token usage ranking within tenant (visible only to platform/tenant admins)
-- ⚠️ **Known limitation**: Auto-interception logic not implemented, currently use test interface `POST /api/token-usage/test-record` to manually verify pipeline
+- ✅ **Automatic recording**: Driven by `ModelCallEndEvent`, automatically extracts `ChatUsage` and persists asynchronously
 
 #### 5. Model Provider Configuration (⭐⭐⭐⭐⭐)
 - **Three-tier scope**: PLATFORM / TENANT / USER
@@ -500,10 +500,10 @@ See [.env.example](.env.example) for complete template.
 
 ### ⚠️ Partially Implemented/Pending
 
-- **Online monitoring** (🚧 In development): Simplified implementation (memory Map recording), no WebSocket real-time push
-- **Skills library** (❌ Planned): Directory not created, need to initialize `skills/` directory and write SKILL.md
-- **Sub-agent delegation** (⚠️ Partially implemented): Framework supported, complex task decomposition effects not fully verified
-- **Token auto-interception** (⚠️ Partially implemented): Test interface usable, auto-extract usage needs to consult AgentScope 2.0 official docs
+- **Online monitoring** (⭐⭐⭐): Frontend page implemented, but no WebSocket real-time push, manual refresh needed
+- **Skills library** (⭐⭐⭐): `skills/` directory created with SKILL.md files (code-review/data-analysis/regex-tester), call flow not fully verified
+- **Sub-agent delegation** (⭐⭐⭐): Framework supported, complex task decomposition effects not fully verified
+- **Token quota management** (❌ Planned): Auto-recording completed, but monthly limits and overage alerts not yet implemented
 
 ## Docker Deployment (Optional)
 

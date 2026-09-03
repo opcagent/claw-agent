@@ -334,7 +334,7 @@ public Object instantiateTool(String code) {
 }
 ```
 
-**注意**: 需要特殊处理的工具(如 `NoteTools`、`WebSearchTools`)在 `AgentRegistry` 中单独处理。
+**注意**: 需要特殊处理的工具(如 `NoteTools`、`MultiSearchTools`)通过 `BuiltinToolFactory` 工厂模式实例化，在 `AgentRegistry` 中统一处理。
 
 ### 依赖管理
 
@@ -463,10 +463,10 @@ curl -X POST http://localhost:8080/api/tools/advanced_math/enable
 
 ##  未来计划
 
-### 短期(1-2周)
-- [ ] 前端管理界面(工具集列表、启用/禁用开关)
-- [ ] 工具集详情页(展示包含的具体工具)
-- [ ] 工具使用统计(调用次数、成功率)
+### 短期（1-2周）✅ 已完成
+- [x] 前端管理界面（工具集列表、启用/禁用开关）
+- [x] 工具集详情页（`/api/tools/list-with-details` 展示包含的具体工具）
+- [ ] 工具使用统计（调用次数、成功率）
 
 ### 中期(1个月)
 - [ ] 工具集市场(第三方工具集发布与安装)

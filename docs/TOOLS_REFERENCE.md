@@ -61,7 +61,7 @@
 **注意**:
 - 不配 API Key 时自动跳过对应引擎，最终兑底 DuckDuckGo
 - DuckDuckGo 需要配置 HTTP 代理（中国大陆网络环境）
-- 详见 [PROXY_CONFIG.md](./PROXY_CONFIG.md) 和 [SEARCH_OPTIONS_COMPARISON.md](./SEARCH_OPTIONS_COMPARISON.md)
+- 详见 [PROXY_CONFIG.md](./PROXY_CONFIG.md)
 
 ---
 
@@ -179,7 +179,7 @@
 
 ---
 
-### 4. 数学计算与编码工具 🔢
+### 5. 数学计算与编码工具 🔢
 
 #### `calculate`
 - **描述**:执行数学计算,支持加减乘除和括号

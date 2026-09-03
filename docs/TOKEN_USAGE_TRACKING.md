@@ -293,82 +293,37 @@ List<TokenUsageSummary> getTenantUsersSummary(Long tenantId, int year, int month
 
 ---
 
-## 🔧 集成到模型调用
+## 🔧 集成到模型调用（✅ 已完成）
 
-### 方案 1: 在 AgentService 中拦截模型响应
+### 已实现方案：ModelCallEndEvent 事件驱动
 
-修改 [AgentService.java](file:///d:/claw-agent/backend/src/main/java/com/claw/agent/service/AgentService.java),在流式响应结束后提取 Token 使用信息:
+通过 AgentScope 的 `ModelCallEndEvent` 事件机制实现自动 Token 记录，无需手动拦截：
 
+**实现位置**: `AgentService.toChatEvent()` 方法处理 `ModelCallEndEvent` 事件
+
+**核心逻辑**:
 ```java
-// 伪代码示例
-public Flux<ServerSentEvent<String>> chat(ChatRequest request, LoginUser user) {
-    return agent.call(...)
-        .doOnNext(event -> {
-            // 流式输出
-        })
-        .doOnComplete(() -> {
-            // 从 AgentState 中提取最后一次模型调用的 Token 使用
-            UsageMetadata usage = extractUsageFromState(agent, ctx);
-            if (usage != null) {
-                tokenUsageService.recordUsage(
-                    user.getUserId(),
-                    user.getTenantId(),
-                    user.getUsername(),
-                    request.getSessionId(),
-                    "openai", // 从配置获取
-                    "gpt-4",   // 从配置获取
-                    usage.getPromptTokens(),
-                    usage.getCompletionTokens(),
-                    UUID.randomUUID().toString(),
-                    null
-                );
-            }
-        });
-}
-```
-
-### 方案 2: 使用 AgentScope Middleware
-
-创建自定义 Middleware,在模型调用后自动记录:
-
-```java
-@Component
-public class TokenUsageMiddleware implements Middleware {
-    
-    @Autowired
-    private TokenUsageService tokenUsageService;
-    
-    @Override
-    public Mono<Msg> call(Msg msg, Chain chain, RuntimeContext ctx) {
-        return chain.call(msg)
-            .doOnSuccess(response -> {
-                UsageMetadata usage = response.getUsage();
-                if (usage != null) {
-                    tokenUsageService.recordUsage(...);
-                }
-            });
+// AgentService 中处理 ModelCallEndEvent
+if (event instanceof ModelCallEndEvent modelCallEnd) {
+    ChatUsage usage = modelCallEnd.getUsage();
+    if (usage != null) {
+        // 异步写入，不阻塞 SSE 流
+        Mono.fromRunnable(() -> {
+            tokenUsageService.recordUsage(
+                userId, tenantId, username,
+                sessionId, providerName, modelName,
+                usage.inputTokens(), usage.outputTokens(),
+                UUID.randomUUID().toString(), null
+            );
+        }).subscribeOn(Schedulers.boundedElastic()).subscribe();
     }
 }
 ```
 
-### 方案 3: 在 ModelFactory 中包装 Model
-
-在创建 Model 时添加 Token 记录逻辑:
-
-```java
-private Model wrapModelWithTokenTracking(Model originalModel, LoginUser user) {
-    return new Model() {
-        @Override
-        public Mono<ChatResponse> call(ChatRequest request) {
-            return originalModel.call(request)
-                .doOnSuccess(response -> {
-                    UsageMetadata usage = response.getUsage();
-                    tokenUsageService.recordUsage(...);
-                });
-        }
-    };
-}
-```
+**技术要点**:
+- 事件驱动：模型调用完成时自动触发，零侵入业务代码
+- 异步写入：`Mono.fromRunnable().subscribeOn(boundedElastic).subscribe()`，不阻塞 SSE 流
+- 回合级缓存：`providerName/modelName` 在对话开始时解析并缓存，避免重复查库+解密 API Key
 
 ---
 
@@ -565,14 +520,15 @@ SELECT * FROM token_usage_summary WHERE user_id = 1 AND period_type = 'monthly';
 - 数据库表设计 (流水表 + 汇总表)
 - 自动更新触发器
 - 实体类、Mapper、Service、Controller
-- REST API 接口 (5个)
-- 编译通过
+- REST API 接口 (5个 + 测试接口)
+- **自动 Token 记录**：通过 `ModelCallEndEvent` 事件驱动，模型调用时自动提取 `ChatUsage` 异步落库
+- **前端页面**：`/token-usage` 完整实现（本月汇总 + 趋势图表 + 流水表格 + 管理员视图）
+- 管理员权限校验（ADMIN / TENANT_ADMIN）
 
-⏳ **待完成**:
-- 集成到模型调用流程 (方案 1/2/3 选其一)
-- 前端页面开发
-- 管理员权限校验
-- 单元测试
+💡 **后续优化方向**:
+- 配额管理：Token 月度上限、超额告警
+- 成本分析：按模型/用户/部门统计费用
+- 导出报表：CSV/Excel 导出月度使用情况
 
 💡 **核心价值**:
 - 完整的 Token 使用追踪能力
