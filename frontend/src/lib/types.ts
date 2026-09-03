@@ -146,6 +146,12 @@ export interface ChatEvent {
   label?: string;
   pendingToolCalls?: PendingToolCall[];
   message?: string;
+  /** 流水线当前步骤（progress 事件） */
+  progressStep?: number;
+  /** 流水线总步数（progress 事件） */
+  progressTotal?: number;
+  /** 流水线名称（progress 事件） */
+  progressLabel?: string;
 }
 
 /** 聊天请求（对应 dto/ChatRequest.java） */

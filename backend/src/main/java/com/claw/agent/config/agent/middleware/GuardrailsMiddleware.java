@@ -15,6 +15,7 @@ import reactor.core.publisher.Flux;
 
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -134,6 +135,7 @@ public class GuardrailsMiddleware implements MiddlewareBase {
      * 输出过滤：对文本增量事件中的敏感信息进行脱敏。
      * <p>
      * 只处理 TextBlockDeltaEvent，其他事件原样透传。
+     * 每个正则只创建一次 Matcher，先 find() 再 replaceAll()，避免重复编译开销。
      *
      * @param event  Agent 事件
      * @param userId 用户 ID（日志用）
@@ -147,11 +149,12 @@ public class GuardrailsMiddleware implements MiddlewareBase {
         if (text == null || text.isEmpty()) {
             return event;
         }
-        // 对敏感信息进行脱敏
+        // 对敏感信息进行脱敏（每个正则只 matcher 一次，先 find 后 replaceAll）
         String filtered = text;
         for (Pattern pattern : OUTPUT_FILTER_PATTERNS) {
-            if (pattern.matcher(filtered).find()) {
-                filtered = pattern.matcher(filtered).replaceAll("[已脱敏]");
+            Matcher m = pattern.matcher(filtered);
+            if (m.find()) {
+                filtered = m.replaceAll("[已脱敏]");
                 log.debug("[安全护栏] 输出脱敏: user={}, pattern={}", userId, pattern.pattern());
             }
         }

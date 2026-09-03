@@ -143,7 +143,7 @@ export default function TokenUsagePage() {
       {/* 页面标题 */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Token 使用统计</h1>
+          <h1 className="text-xl font-semibold text-slate-800">Token 使用统计</h1>
           <p className="text-muted-foreground mt-1">查看您的模型调用消耗和趋势分析</p>
         </div>
         <Button onClick={loadTokenUsageData} variant="outline">
@@ -161,7 +161,7 @@ export default function TokenUsagePage() {
               <Database className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{formatNumber(currentMonth.totalTokens || 0)}</div>
+              <div className="text-2xl font-semibold text-slate-800">{formatNumber(currentMonth.totalTokens || 0)}</div>
               <p className="text-xs text-muted-foreground">
                 输入: {formatNumber(currentMonth.totalPromptTokens || 0)} | 
                 输出: {formatNumber(currentMonth.totalCompletionTokens || 0)}
@@ -175,7 +175,7 @@ export default function TokenUsagePage() {
               <MessageSquare className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{formatNumber(currentMonth.requestCount || 0)}</div>
+              <div className="text-2xl font-semibold text-slate-800">{formatNumber(currentMonth.requestCount || 0)}</div>
               <p className="text-xs text-muted-foreground">本月累计调用</p>
             </CardContent>
           </Card>
@@ -186,7 +186,7 @@ export default function TokenUsagePage() {
               <Calendar className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">
+              <div className="text-2xl font-semibold text-slate-800">
                 {currentMonth.periodStart?.substring(5, 10)} ~ {currentMonth.periodEnd?.substring(5, 10)}
               </div>
               <p className="text-xs text-muted-foreground">月度统计</p>
@@ -199,7 +199,7 @@ export default function TokenUsagePage() {
               <Clock className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">
+              <div className="text-2xl font-semibold text-slate-800">
                 {currentMonth.lastUpdateTime ? formatTime(currentMonth.lastUpdateTime).split(" ")[1] : "-"}
               </div>
               <p className="text-xs text-muted-foreground">

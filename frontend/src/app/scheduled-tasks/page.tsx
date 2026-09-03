@@ -194,7 +194,7 @@ function ScheduledTasksPage() {
           </div>
 
           {/* 任务表格 */}
-          <div className="rounded-xl border bg-white">
+          <div className="rounded-2xl border bg-white">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b bg-slate-50/80 text-left text-xs text-muted-foreground">

@@ -282,7 +282,7 @@ function EmailConfigPage() {
                         TLS
                       </Badge>
                     ) : (
-                      <Badge variant="outline" className="bg-gray-50 text-gray-700">
+                      <Badge variant="outline" className="bg-slate-50 text-slate-700">
                         无
                       </Badge>
                     )}

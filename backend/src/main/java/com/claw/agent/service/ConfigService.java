@@ -328,7 +328,12 @@ public class ConfigService {
                 ParamKeyInfo.builder()
                         .key(KEY_COMPACTION_TRIGGER)
                         .description("上下文压缩触发阈值（会话消息条数达到后自动压缩）")
-                        .defaultValue("30")
+                        .defaultValue("15")
+                        .build(),
+                ParamKeyInfo.builder()
+                        .key("compaction_trigger_tokens")
+                        .description("上下文压缩触发阈值（按 tokens 精确控制；未配置时按模型上下文窗口的 80% 动态计算）")
+                        .defaultValue("自动")
                         .build(),
                 ParamKeyInfo.builder()
                         .key(KEY_COMPACTION_KEEP)

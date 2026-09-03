@@ -36,6 +36,8 @@ type Block =
       createTime?: string;
       /** 工具调用记录（不单独渲染，仅在气泡内折叠展示） */
       toolCalls?: Array<{ name: string; status: 'running' | 'success' | 'error'; callId?: string }>;
+      /** 流水线进度（progress 事件时更新） */
+      pipelineProgress?: { step: number; total: number; label: string };
     }
   | {
       id: string;
@@ -335,11 +337,14 @@ export default function ChatView() {
   const sessionIdRef = useRef<string | null>(null);
   sessionIdRef.current = currentSessionId;
 
-  // SSE 文本增量 rAF 批处理：高频 text 事件累积到 ref，每帧统一 flush 到 state，
+  // SSE 文本增量 rAF 批处理：高频 text/thinking 事件累积到 ref，每帧统一 flush 到 state，
   // 避免每秒 10-30 次 setState 导致的过度 React reconciliation
   const rafIdRef = useRef<number>(0);
   const pendingTextRef = useRef("");
   const currentTargetIdRef = useRef<string>("");
+  // 思考文本 rAF 批处理：与 text 共用 rAF 调度器，flush 时统一更新 state
+  const pendingThinkingRef = useRef("");
+  const thinkingTargetIdRef = useRef<string>("");
 
   // 当前 SSE 流的 AbortController：切换会话或卸载时用于中止流
   const streamAbortRef = useRef<AbortController | null>(null);
@@ -364,6 +369,8 @@ export default function ChatView() {
     }
     pendingTextRef.current = "";
     currentTargetIdRef.current = "";
+    pendingThinkingRef.current = "";
+    thinkingTargetIdRef.current = "";
     // 切换会话/卸载时不再需要保留活跃流标记
     activeStreamIdRef.current = null;
   }, []);
@@ -393,6 +400,23 @@ export default function ChatView() {
           ...b,
           thinking: false,
           text: (b.thinking ? "" : b.text) + text,
+        };
+      })
+    );
+  }, []);
+
+  /** 将缓冲区的思考文本在下一帧统一写入 blocks state */
+  const flushPendingThinking = useCallback(() => {
+    const text = pendingThinkingRef.current;
+    const blockId = thinkingTargetIdRef.current;
+    if (!text || !blockId) return;
+    pendingThinkingRef.current = "";
+    setBlocks((prev) =>
+      prev.map((b) => {
+        if (b.id !== blockId || b.kind !== "assistant") return b;
+        return {
+          ...b,
+          thinkingText: (b.thinkingText || "") + text,
         };
       })
     );
@@ -493,13 +517,13 @@ export default function ChatView() {
         });
         break;
       case "thinking":
-        // 思考增量文本：累积到思考区域
-        updateAssistant(targetBlockId, (b) => {
-          b.thinkingText = (b.thinkingText || "") + (event.delta || "");
-        });
+        // rAF 批处理：思考增量累积到 ref，与 text 共用 rAF 调度器统一 flush
+        thinkingTargetIdRef.current = targetBlockId;
+        pendingThinkingRef.current += event.delta || "";
         break;
       case "thinking_end":
-        // 思考结束：关闭思考状态，保留思考文本可折叠查看
+        // 思考结束：先 flush 缓冲区中残留的思考文本，再关闭思考状态
+        flushPendingThinking();
         updateAssistant(targetBlockId, (b) => {
           b.thinking = false;
           b.thinkingExpanded = false;
@@ -512,7 +536,9 @@ export default function ChatView() {
         if (!rafIdRef.current) {
           rafIdRef.current = requestAnimationFrame(() => {
             rafIdRef.current = 0;
+            // 同一帧内同时 flush 文本和思考增量，减少 React reconciliation 次数
             flushPendingText();
+            flushPendingThinking();
           });
         }
         // 注意：不在此处 setSending(false)，保持「取消」按钮直到流真正结束
@@ -585,7 +611,7 @@ export default function ChatView() {
       case "end":
         // 回合结束兜底：部分模型不发 thinking_end（如不支持思考的模型），
         // 必须在此确保思考态关闭，否则 UI 永久停留在「思考中…」
-        // 同时 flush rAF 队列中可能残留的文本增量
+        // 同时 flush rAF 队列中可能残留的文本和思考增量
         if (rafIdRef.current) {
           cancelAnimationFrame(rafIdRef.current);
           rafIdRef.current = 0;
@@ -594,11 +620,29 @@ export default function ChatView() {
           const remaining = pendingTextRef.current;
           pendingTextRef.current = "";
           currentTargetIdRef.current = "";
+          const remainingThink = pendingThinkingRef.current;
+          pendingThinkingRef.current = "";
+          thinkingTargetIdRef.current = "";
           updateAssistant(targetBlockId, (b) => {
             b.thinking = false;
             if (remaining) {
               b.text = b.text + remaining;
             }
+            if (remainingThink) {
+              b.thinkingText = (b.thinkingText || "") + remainingThink;
+            }
+          });
+        }
+        break;
+      case "progress":
+        // 流水线进度：更新助手气泡内的进度条
+        if (event.progressStep != null && event.progressTotal != null) {
+          updateAssistant(targetBlockId, (b) => {
+            b.pipelineProgress = {
+              step: event.progressStep!,
+              total: event.progressTotal!,
+              label: event.progressLabel || "流水线",
+            };
           });
         }
         break;
@@ -653,10 +697,11 @@ export default function ChatView() {
     appendBlock({ id: assistantId, kind: "assistant", text: "", thinking: true, thinkingText: "", thinkingExpanded: false, createTime: assistantTime });
     activeStreamIdRef.current = assistantId;
     setSending(true);
-    // SSE 流式请求超时保护：2 分钟无响应自动中止，避免 UI 永久卡在「回复中…」
+    // SSE 流式请求超时保护：10 分钟无响应自动中止，避免 UI 永久卡在「回复中…」
+    // 流水线场景（25 轮迭代 + 多工具调用）可能持续 10-15 分钟，10 分钟作为安全网
     const streamController = new AbortController();
     streamAbortRef.current = streamController; // 存储到 ref，切换会话时可中止
-    const streamTimeout = setTimeout(() => streamController.abort(), 120_000);
+    const streamTimeout = setTimeout(() => streamController.abort(), 600_000);
     try {
       await api.stream(
         "/api/chat/stream",
@@ -722,7 +767,7 @@ export default function ChatView() {
     setSending(true);
     const confirmController = new AbortController();
     streamAbortRef.current = confirmController; // 存储到 ref，切换会话时可中止
-    const confirmTimeout = setTimeout(() => confirmController.abort(), 120_000);
+    const confirmTimeout = setTimeout(() => confirmController.abort(), 600_000);
     try {
       await api.stream(
         "/api/chat/confirm",
@@ -1603,6 +1648,27 @@ const BlockView = React.memo(function BlockView({
                 ))}
               </div>
             </details>
+          )}
+
+          {/* 流水线进度条（progress 事件驱动，仅流水线场景显示） */}
+          {block.pipelineProgress && (
+            <div className="mb-2 rounded-lg bg-indigo-50/80 px-3 py-2">
+              <div className="flex items-center justify-between mb-1">
+                <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-indigo-600">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  {block.pipelineProgress.label}
+                </span>
+                <span className="text-[11px] text-indigo-500">
+                  步骤 {block.pipelineProgress.step}/{block.pipelineProgress.total}
+                </span>
+              </div>
+              <div className="h-1.5 w-full rounded-full bg-indigo-100">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-indigo-400 to-violet-500 transition-all duration-500 ease-out"
+                  style={{ width: `${Math.round((block.pipelineProgress.step / block.pipelineProgress.total) * 100)}%` }}
+                />
+              </div>
+            </div>
           )}
 
           {/* 思考过程（Claude 风格：左侧细线 + 浅色背景） */}

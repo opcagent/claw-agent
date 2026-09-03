@@ -6,6 +6,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.reactive.resource.NoResourceFoundException;
 
 /**
  * 全局异常处理器（阿里规约：统一异常出口，避免异常堆栈直接暴露给前端）。
@@ -56,6 +57,22 @@ public class GlobalExceptionHandler {
                 : e.getFieldErrors().get(0).getDefaultMessage();
         log.warn("参数校验失败: {}", msg);
         return Result.fail(ResultCode.PARAM_ERROR, msg);
+    }
+
+    /**
+     * 404 资源未找到：客户端请求了不存在的路径。
+     * <p>
+     * 属于客户端错误，不应以 ERROR + 完整堆栈刷屏；
+     * 仅记 WARN 一行日志，返回标准 404 结果。
+     *
+     * @param e 资源未找到异常
+     * @return 404 错误结果
+     */
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    @ExceptionHandler(NoResourceFoundException.class)
+    public Result<Void> handleNoResourceFound(NoResourceFoundException e) {
+        log.warn("资源未找到: {}", e.getMessage());
+        return Result.fail(ResultCode.NOT_FOUND);
     }
 
     /**

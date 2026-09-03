@@ -10,8 +10,8 @@ const fontSans = `system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Robo
 const fontMono = `ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace`;
 
 export const metadata: Metadata = {
-  title: "Opc Agent 平台",
-  description: "基于 AgentScope 的个人 Agent 平台（多模型 / RBAC / 用户隔离）",
+  title: "智能 Agent 平台",
+  description: "基于 AgentScope 的个人 Agent 平台 —— 多模型对话、工具调用、技能自学习、分层记忆",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

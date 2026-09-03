@@ -153,7 +153,7 @@ export function ModelProviderSelector({
   return (
     <div className="space-y-6">
       <div>
-        <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 block">
+        <label className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">
           选择模型提供商
         </label>
         <Select value={selectedProvider} onValueChange={handleProviderChange}>
@@ -177,7 +177,7 @@ export function ModelProviderSelector({
       </div>
       
       <div>
-        <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 block">
+        <label className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">
           选择模型
         </label>
         <ModelSelector 

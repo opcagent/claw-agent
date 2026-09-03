@@ -135,24 +135,23 @@ export async function stream(
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
   /**
-   * 流超时保护（内容感知）：
-   * - 未收到文本前 15s 无事件 → 后端卡死，断开
-   * - 收到文本后 3s 无事件 → 用户已看到回复，Agent 后续处理（工具调用等）已完成，主动断开
-   * - 硬超时 120s → 无论任何情况，强制断开
+   * 流超时保护：
+   * - 空闲超时 600s：后端 keepalive 每 15s 发心跳，正常情况下空闲超时不会触发。
+   *   保留此超时作为安全网，防止后端完全卡死时连接永不断开。
+   *   流水线场景（25 轮迭代 + 多工具调用）可能持续 10-15 分钟，600s 留足余量。
+   * - 硬超时 1200s（20 分钟）→ 无论任何情况，强制断开（兆底）。
+   *   此前 600s 对复杂流水线偏紧，提升至 1200s 覆盖研究报告/故障排查等长链路场景。
    */
-  const IDLE_TIMEOUT_WAITING = 15_000;   // 等待回复阶段
-  const IDLE_TIMEOUT_AFTER_TEXT = 3_000;  // 已收到回复，短暂等待后续处理完成
-  const MAX_STREAM_DURATION = 120_000;
+  const IDLE_TIMEOUT = 600_000;
+  const MAX_STREAM_DURATION = 1200_000;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
   let hardTimer: ReturnType<typeof setTimeout> | null = null;
-  let textReceived = false;
 
   function resetIdleTimer() {
     if (idleTimer) clearTimeout(idleTimer);
-    const timeout = textReceived ? IDLE_TIMEOUT_AFTER_TEXT : IDLE_TIMEOUT_WAITING;
     idleTimer = setTimeout(() => {
       reader.cancel().catch(() => {});
-    }, timeout);
+    }, IDLE_TIMEOUT);
   }
   resetIdleTimer();
   hardTimer = setTimeout(() => {
@@ -180,8 +179,6 @@ export async function stream(
         const event = parseBlock(block);
         if (event) {
           onEvent(event);
-          // 收到文本事件后切换为短超时（用户已看到回复，后续工具处理完成后快速断开）
-          if (event.type === "text") textReceived = true;
         }
         // 收到 end 事件：立即关闭连接，不等后端 Flux 完成
         if (event?.type === "end") {

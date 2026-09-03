@@ -75,7 +75,7 @@ export default function LoginPage() {
         false
       );
       setAuth(res.data);
-      toast.success("登录成功");
+      toast.success("登录成功", { duration: 1500 });
       router.replace("/home");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "登录失败");
@@ -105,7 +105,7 @@ export default function LoginPage() {
         <div className="relative z-10">
           <div className="flex items-center gap-3">
             <LogoMark className="h-10 w-10" />
-            <span className="text-xl font-bold text-slate-800">{brandName}</span>
+            <span className="text-lg font-bold text-slate-800">{brandName}</span>
           </div>
         </div>
 

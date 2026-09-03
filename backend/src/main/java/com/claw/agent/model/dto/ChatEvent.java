@@ -17,6 +17,7 @@ import java.util.List;
  *   <li>tool_start / tool_end —— 工具调用开始 / 结束（含状态）</li>
  *   <li>confirm_request —— HITL 待确认（携带待确认工具列表）</li>
  *   <li>subagent —— 子 Agent 暴露（可渲染为新会话入口）</li>
+ *   <li>progress —— 流水线进度（携带 step/total/label）</li>
  *   <li>end —— 回复结束</li>
  *   <li>error —— 执行异常</li>
  * </ul>
@@ -62,6 +63,15 @@ public class ChatEvent {
 
     /** 错误信息（error 时） */
     private String message;
+
+    /** 流水线当前步骤（progress 时，从 1 开始） */
+    private Integer progressStep;
+
+    /** 流水线总步数（progress 时） */
+    private Integer progressTotal;
+
+    /** 流水线名称/步骤描述（progress 时） */
+    private String progressLabel;
 
     /** 待确认的工具调用（展示给用户审批） */
     @Data

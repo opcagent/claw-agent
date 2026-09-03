@@ -49,6 +49,9 @@ import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.util.StringUtils;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -116,22 +119,26 @@ public class AgentRegistry {
     /** 默认权限模式（数据库未配置时） */
     private static final String DEFAULT_PERMISSION_MODE = "DEFAULT";
 
-    /** Agent 基础系统提示词（人格可由预设模板与工作区 AGENTS.md 进一步叠加） */
-    private static final String BASE_SYS_PROMPT = """
-            你是 Claw，一名个人全能助理，部署在用户自己的服务器上。你的能力包括：
-            1. 文件与工作区管理：读写工作区文件、维护笔记与知识库；
-            2. Shell 命令执行：可运行命令完成自动化任务，危险操作会先征求用户确认；
-            3. 网络搜索与信息整理；
-            4. 图片与文件理解：用户会上传图片或文件，请结合内容作答；
-            5. 长期记忆：把用户的重要偏好与事实沉淀到记忆，跨会话延续。
-            请始终使用简体中文回复，条理清晰；执行复杂任务前先给出计划。
+    /** Agent 基础系统提示词（从 classpath:prompts/base-sys-prompt.md 加载，人格可由预设模板与工作区 AGENTS.md 进一步叠加） */
+    private static final String BASE_SYS_PROMPT = loadBaseSysPrompt();
 
-            ## 安全红线（强制，不可绕过）
-            - 禁止通过 write_file / shell 等工具修改平台源码目录：backend/src/、frontend/src/、pom.xml、package.json、.git/、.env、application.yml。
-            - 禁止在对话中提议直接写入源码（如「我来帮你实现」「我直接写出完整代码」）。正确做法：给出代码片段供参考，并说明「请在 IDE 中手动修改」。
-            - 如果用户要求修改上述文件，必须拒绝并说明：「平台源码受安全策略保护，无法通过对话直接修改，请在 IDE 中手动更改。」
-            - 允许在工作区目录（workspace/、notes/、knowledge/、skills/）内自由读写。
-            """;
+    /**
+     * 从 classpath 加载基础系统提示词。
+     * <p>
+     * 提示词维护在 {@code resources/prompts/base-sys-prompt.md}，避免硬编码在 Java 代码中，
+     * 修改提示词无需重新编译。启动时一次性读入，运行时零开销。
+     */
+    private static String loadBaseSysPrompt() {
+        String resourcePath = "prompts/base-sys-prompt.md";
+        try (InputStream is = AgentRegistry.class.getClassLoader().getResourceAsStream(resourcePath)) {
+            if (is == null) {
+                throw new IllegalStateException("基础系统提示词文件缺失: classpath:" + resourcePath);
+            }
+            return new String(is.readAllBytes(), StandardCharsets.UTF_8).trim();
+        } catch (IOException e) {
+            throw new IllegalStateException("读取基础系统提示词失败: classpath:" + resourcePath, e);
+        }
+    }
 
     /** 缓存：用户ID(+预设编码) -> Agent 实例 */
     private final Map<String, HarnessAgent> agents = new ConcurrentHashMap<>();
@@ -289,18 +296,24 @@ public class AgentRegistry {
         String permMode = configService.resolveValue(ConfigService.KEY_PERMISSION_MODE, tenantId, userId);
         parsePermissionMode(permMode); // 仅校验，不赋值（buildPermissionContext 内部会再解析）
 
-        // 5. 上下文压缩参数（范围校验，非法值回退默认）
-        int compactTrigger = configService.resolveInt(ConfigService.KEY_COMPACTION_TRIGGER, tenantId, userId, 30);
-        int compactKeep = configService.resolveInt(ConfigService.KEY_COMPACTION_KEEP, tenantId, userId, 10);
-        if (compactTrigger < 5) compactTrigger = 30;
-        if (compactKeep < 3) compactKeep = 10;
-        if (compactKeep >= compactTrigger) compactKeep = compactTrigger - 1;
+        // 5. 上下文压缩参数（动态计算：按模型上下文窗口的 80% 触发，充分利用长上下文能力）
+        int contextWindow = modelFactory.resolveContextWindow(provider.getProvider(), provider.getModelName());
+        int dynamicTrigger = (int) ((long) contextWindow * ModelFactory.COMPACTION_TRIGGER_PERCENT / 100);
+        // 数据库显式配置时覆盖动态值（兼容历史配置），否则使用动态计算
+        String explicitTokens = configService.resolveValue("compaction_trigger_tokens", tenantId, userId);
+        int compactTriggerTokens = StringUtils.hasText(explicitTokens)
+                ? configService.resolveInt("compaction_trigger_tokens", tenantId, userId, dynamicTrigger)
+                : dynamicTrigger;
+        int compactKeepMessages = configService.resolveInt(ConfigService.KEY_COMPACTION_KEEP, tenantId, userId, 10);
+        if (compactTriggerTokens < 10000) compactTriggerTokens = dynamicTrigger;
+        if (compactKeepMessages < 3) compactKeepMessages = 10;
 
         int flushMinutes = configService.resolveInt(ConfigService.KEY_MEMORY_FLUSH_MINUTES, tenantId, userId, 10);
         if (flushMinutes < 1) flushMinutes = 10;
 
-        log.info("前置校验通过: user={}, tenant={}, provider={}, model={}, stateStore={}, workspace={}",
-                userId, tenantCode, provider.getProvider(), provider.getModelName(), storeType, workspace);
+        log.info("前置校验通过: user={}, tenant={}, provider={}, model={}, contextWindow={}, compactTrigger={}, stateStore={}, workspace={}",
+                userId, tenantCode, provider.getProvider(), provider.getModelName(),
+                contextWindow, compactTriggerTokens, storeType, workspace);
 
         // ==================== Phase 2: 昂贵操作（前置条件全部满足后才执行） ====================
 
@@ -370,10 +383,19 @@ public class AgentRegistry {
                 .model(chatModel)
                 .workspace(workspace)
                 .toolkit(toolkit)  // 传入已注册工具的 toolkit
-                // 上下文压缩：超过触发条数触发，保留最近 N 条，其余蒸馏为摘要
+                // 最大迭代次数：流水线任务（研究报告/故障排查/长文写作）通常需要 12-20 轮，
+                // 默认 10 轮会在多步骤流水线中途耗尽预算导致任务失败；25 轮覆盖复杂场景 + 错误恢复空间
+                .maxIters(25)
+                // 模型拒绝时不立即中止：允许 Agent 携带失败信息重新尝试替代方案，
+                // 流水线场景下某步失败后 Agent 可调整策略继续，而非直接断掉整个任务
+                .stopOnReject(false)
+                // 上下文压缩：动态阈值（模型上下文窗口的 80%），压缩前先卸载大工具结果加速
+                // 压缩期间由 AgentService 的 keepalive 机制发心跳保持 SSE 连接
                 .compaction(CompactionConfig.builder()
-                        .triggerMessages(compactTrigger)
-                        .keepMessages(compactKeep)
+                        .triggerTokens(compactTriggerTokens)
+                        .keepMessages(compactKeepMessages)
+                        .keepTokensMax(800)           // 限制摘要最多 800 tokens，防止生成过长
+                        .offloadBeforeCompact(true)   // 先卸载大工具结果，大幅减少输入量
                         .build())
                 // 双层记忆：flush 节流，控制辅助 LLM 调用成本
                 .memory(MemoryConfig.builder()
@@ -400,7 +422,8 @@ public class AgentRegistry {
                 // 执行链路追踪 + 性能监控（自定义 middleware 在 Harness 内置 middleware 之前执行）
                 .middleware(new AgentTraceMiddleware())
                 .middleware(new PerformanceMiddleware())
-                // 工具执行重试：工具调用失败时自动重试（#2829 修复：此前未配置导致工具失败不重试）
+                // 工具执行超时保护：30s 超时 + 失败重试（#2829 重试可能不生效，但超时截断仍有效）
+                // 防止单个工具卡死拖垮整条流水线；重试覆盖瞬时网络故障
                 .toolExecutionConfig(TOOL_EXECUTION_CONFIG)
                 // 状态存储：分布式部署用 Redis，单机开发可切 json
                 .stateStore(buildStateStore(storeType))

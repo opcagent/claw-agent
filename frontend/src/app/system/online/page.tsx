@@ -97,7 +97,7 @@ function OnlineMonitorPage() {
 
           {/* 统计卡：在线人数 / 活跃人数 */}
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="flex items-center gap-4 rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm">
+            <div className="flex items-center gap-4 rounded-2xl border border-slate-200/70 bg-white p-4 shadow-sm">
               <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-400 to-teal-500 text-white shadow-sm">
                 <Activity className="h-5 w-5" />
               </span>
@@ -106,7 +106,7 @@ function OnlineMonitorPage() {
                 <p className="text-xs text-muted-foreground">当前在线</p>
               </div>
             </div>
-            <div className="flex items-center gap-4 rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm">
+            <div className="flex items-center gap-4 rounded-2xl border border-slate-200/70 bg-white p-4 shadow-sm">
               <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-400 to-violet-500 text-white shadow-sm">
                 <Users className="h-5 w-5" />
               </span>

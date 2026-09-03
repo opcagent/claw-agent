@@ -59,6 +59,7 @@ import reactor.core.scheduler.Schedulers;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
@@ -66,6 +67,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Agent 对话服务：编排 AgentRegistry（满血版 Agent）与前端之间的事件流。
@@ -106,6 +110,7 @@ public class AgentService {
     private final OcrTools ocrTools;
     private final DocumentParseTools documentParseTools;
     private final SessionSummaryService sessionSummaryService;
+    private final PipelineCursorService pipelineCursorService;
 
     /** HITL：等待用户确认的工具调用（键 = username|sessionId） */
     private final Map<String, List<ToolUseBlock>> pendingConfirms = new ConcurrentHashMap<>();
@@ -168,14 +173,32 @@ public class AgentService {
             UserMessage msg;
             RuntimeContext rc;
             ModelProviderConfig providerCfg;
+            // 流水线是消息级剧本注入（与预设人格正交）：不影响 Agent 缓存键，
+            // 仅把步骤/异常策略拼进当轮用户消息，避免人格与剧本耦合污染长期记忆
+            // 流水线解析：优先使用请求中的 pipelineCode；未指定时自动检测未完成的游标进行断点续跑
+            AgentPipeline pipeline;
+            boolean isResume = false;
+            if (StringUtils.hasText(request.getPipelineCode())) {
+                pipeline = resolvePipeline(user, request.getPipelineCode());
+            } else {
+                // 自动续跑检测：同一会话中上次流水线未完成 → 重新注入剧本 + 标记已完成步骤
+                PipelineCursorService.CursorData cursor =
+                        pipelineCursorService.loadCursor(user.getUserId(), effectiveSessionId);
+                if (pipelineCursorService.isUnfinished(cursor)) {
+                    pipeline = resolvePipeline(user, cursor.getPipelineCode());
+                    isResume = true;
+                    log.info("自动续跑流水线: user={}, session={}, pipeline={}, completedSteps={}/{}",
+                            user.getUsername(), effectiveSessionId,
+                            cursor.getPipelineCode(), cursor.getCompletedSteps(), cursor.getTotalSteps());
+                } else {
+                    pipeline = null;
+                }
+            }
             try {
                 agent = resolveAgent(user, request.getPresetCode());
                 // 提前创建 RuntimeContext + 解析模型配置，供 buildUserMessage 中 OCR 预处理使用
                 rc = runtimeContext(user, effectiveSessionId);
                 providerCfg = configService.resolveCurrentProvider(user.getTenantId(), user.getUserId());
-                // 流水线是消息级剧本注入（与预设人格正交）：不影响 Agent 缓存键，
-                // 仅把步骤/异常策略拼进当轮用户消息，避免人格与剧本耦合污染长期记忆
-                AgentPipeline pipeline = resolvePipeline(user, request.getPipelineCode());
                 msg = buildUserMessage(user, request, pipeline, rc, providerCfg);
             } catch (RuntimeException e) {
                 // 准备段异常（如模型提供商未配置 API key）发生在流式段之前，
@@ -195,12 +218,48 @@ public class AgentService {
             // 中途异常时把已产出部分以失败状态落库，不丢用户已看到的输出。
             // 局部变量只属于本次流订阅，多回合并发互不干扰（同会话由 RuntimeContext 串行化）
             StringBuilder replyBuffer = new StringBuilder();
-            return agent.streamEvents(List.of(msg), rc)
-                    .map(event -> {
-                        ChatEvent chatEvent = toChatEvent(user, effectiveSessionId, event, providerName, modelName);
-                        accumulateAndFlush(user, effectiveSessionId, chatEvent, replyBuffer);
-                        return chatEvent;
+            // 工具调用追踪：记录本轮对话中调用的所有工具名称（用于 Token 日志）
+            List<String> toolNames = new ArrayList<>();
+            // 流水线进度追踪：pipeline != null 时启用，每次 ModelCallEndEvent 计数 +1
+            // 进度 = min(当前轮次, 总步数) / 总步数，前端展示进度条
+            final int pipelineTotalSteps = pipeline != null
+                    ? countPipelineSteps(pipeline.getSteps()) : 0;
+            final AtomicInteger pipelineModelCallCount = new AtomicInteger(0);
+            if (pipeline != null) {
+                if (!isResume) {
+                    // 新流水线启动：清理旧游标，保存新游标
+                    pipelineCursorService.clearCursor(user.getUserId(), effectiveSessionId);
+                    pipelineCursorService.saveCursor(user.getUserId(), effectiveSessionId,
+                            pipeline.getPipelineCode(), pipeline.getPipelineName(), pipelineTotalSteps);
+                }
+                log.debug("流水线准备就绪: user={}, session={}, totalSteps={}, resume={}",
+                        user.getUsername(), effectiveSessionId, pipelineTotalSteps, isResume);
+            }
+            // keepalive 机制：Flux.merge 侧通道每 15s 发心跳，与事件流并行。
+            // 相比 concatMap+delaySubscription 模式，不创建内部 Flux 队列，
+            // 长流水线（25 轮迭代）无定时器堆积。主事件流终止时 takeUntilOther 同步停止心跳。
+            Flux<ChatEvent> eventStream = agent.streamEvents(List.of(msg), rc)
+                    .doOnNext(event -> {
+                        accumulateAndFlush(user, effectiveSessionId,
+                                toChatEvent(user, effectiveSessionId, event, providerName, modelName, toolNames,
+                                        pipeline, pipelineTotalSteps, pipelineModelCallCount),
+                                replyBuffer);
+                        if (event instanceof ToolCallStartEvent toolStart) {
+                            String toolName = toolStart.getToolCallName();
+                            if (toolName != null && !toolNames.contains(toolName)) {
+                                toolNames.add(toolName);
+                            }
+                        }
                     })
+                    .map(event -> toChatEvent(user, effectiveSessionId, event, providerName, modelName, toolNames,
+                            pipeline, pipelineTotalSteps, pipelineModelCallCount))
+                    .share();  // 热流：merge 与 takeUntilOther 共享同一订阅，避免 streamEvents 被重复执行
+            Flux<ChatEvent> heartbeat = Flux.interval(Duration.ofSeconds(15))
+                    .map(t -> ChatEvent.builder().type("keepalive")
+                            .sessionId(effectiveSessionId).build());
+            Flux<ChatEvent> withKeepalive = Flux.merge(eventStream, heartbeat)
+                    .takeUntilOther(eventStream.ignoreElements());
+            return withKeepalive
                     .doOnComplete(() -> log.debug("Flux 完成：user={}, session={}", user.getUsername(), effectiveSessionId))
                     .doFinally(signal -> log.debug("Flux 终止信号：user={}, session={}, signal={}", user.getUsername(), effectiveSessionId, signal))
                     .onErrorResume(e -> {
@@ -281,10 +340,20 @@ public class AgentService {
         String modelName = providerCfg.getModelName();
         // 恢复流同样累积回复并落库（本轮续接输出与主对话轮同等待遇）
         StringBuilder replyBuffer = new StringBuilder();
+        // HITL 恢复执行也跟踪工具调用（HITL 无流水线上下文，进度追踪参数传空值）
+        List<String> toolNames = new ArrayList<>();
         return agent.streamEvents(List.of(resumeMsg), rc)
                 .map(event -> {
-                    ChatEvent chatEvent = toChatEvent(user, sessionId, event, providerName, modelName);
+                    ChatEvent chatEvent = toChatEvent(user, sessionId, event, providerName, modelName, toolNames,
+                            null, 0, new AtomicInteger(0));
                     accumulateAndFlush(user, sessionId, chatEvent, replyBuffer);
+                    // 跟踪工具调用
+                    if (event instanceof ToolCallStartEvent toolStart) {
+                        String toolName = toolStart.getToolCallName();
+                        if (toolName != null && !toolNames.contains(toolName)) {
+                            toolNames.add(toolName);
+                        }
+                    }
                     return chatEvent;
                 })
                 .onErrorResume(e -> {
@@ -527,7 +596,15 @@ public class AgentService {
         List<ContentBlock> blocks = new ArrayList<>();
         // 剧本置于首位：先约束执行框架，再给出用户原始诉求与附件，保证模型按步骤展开
         if (pipeline != null) {
-            blocks.add(TextBlock.builder().text(buildPipelineScript(pipeline)).build());
+            // 检查是否续跑模式：同一会话存在未完成游标 → 注入续跑剧本（标记已完成步骤）
+            PipelineCursorService.CursorData cursor =
+                    pipelineCursorService.loadCursor(user.getUserId(), rc.getSessionId());
+            if (pipelineCursorService.isUnfinished(cursor)) {
+                blocks.add(TextBlock.builder()
+                        .text(buildResumePipelineScript(pipeline, cursor)).build());
+            } else {
+                blocks.add(TextBlock.builder().text(buildPipelineScript(pipeline)).build());
+            }
         }
         blocks.add(TextBlock.builder().text(request.getContent()).build());
         boolean visionSupported = supportsVision(providerCfg);
@@ -539,16 +616,72 @@ public class AgentService {
         return new UserMessage(user.getUsername(), blocks.toArray(new ContentBlock[0]));
     }
 
-    /** 拼装流水线剧本文本：名称 + 步骤 + 异常处理策略（空策略省略对应段） */
-    private String buildPipelineScript(AgentPipeline pipeline) {
+    /**
+     * 拼装续跑剧本文本：标记已完成步骤，要求 Agent 从断点继续。
+     * <p>
+     * 与 {@link #buildPipelineScript} 不同，续跑剧本包含「已完成步骤」上下文，
+     * Agent 可据此跳过已执行部分，避免重复工作。
+     */
+    private String buildResumePipelineScript(AgentPipeline pipeline,
+                                             PipelineCursorService.CursorData cursor) {
+        int totalSteps = countPipelineSteps(pipeline.getSteps());
+        int completedSteps = Math.min(cursor.getCompletedSteps(), totalSteps);
         StringBuilder sb = new StringBuilder();
         sb.append("【流水线：").append(pipeline.getPipelineName())
-                .append("】请严格按以下剧本执行本次任务，逐步完成每个步骤并输出对应结果：\n\n")
-                .append(pipeline.getSteps());
+                .append("（共 ").append(totalSteps).append(" 步）")
+                .append("】\n\n");
+        sb.append("⚠️ 上次执行在步骤 ").append(completedSteps + 1).append(" 中断，");
+        sb.append("步骤 1-").append(completedSteps).append(" 已完成。");
+        sb.append("请从步骤 ").append(completedSteps + 1).append(" 继续执行，");
+        sb.append("不要重复已完成的步骤。\n\n");
+        sb.append("## 输出要求\n");
+        sb.append("- 每完成一个步骤后，立即输出该步骤的结果。\n");
+        sb.append("- 每个步骤的结果用二级标题分隔，格式：## 步骤 N：步骤名称\n");
+        sb.append("- 如果某步失败，记录失败原因后继续执行后续步骤。\n\n");
+        sb.append("## 执行步骤\n");
+        sb.append(pipeline.getSteps());
         if (StringUtils.hasText(pipeline.getExceptionHandling())) {
-            sb.append("\n\n异常处理策略：\n").append(pipeline.getExceptionHandling());
+            sb.append("\n\n## 异常处理策略\n").append(pipeline.getExceptionHandling());
         }
         return sb.toString();
+    }
+
+    /** 拼装流水线剧本文本：名称 + 步骤 + 增量输出指令 + 异常处理策略 */
+    private String buildPipelineScript(AgentPipeline pipeline) {
+        int totalSteps = countPipelineSteps(pipeline.getSteps());
+        StringBuilder sb = new StringBuilder();
+        sb.append("【流水线：").append(pipeline.getPipelineName())
+                .append("（共 ").append(totalSteps).append(" 步）")
+                .append("】请严格按以下剧本执行本次任务，逐步完成每个步骤。\n\n")
+                // 增量输出指令：要求 Agent 每完成一步立即输出中间结果，而非等全部完成
+                .append("## 输出要求\n")
+                .append("- 每完成一个步骤后，立即输出该步骤的结果（不要等所有步骤完成再统一输出）。\n")
+                .append("- 每个步骤的结果用二级标题分隔，格式：## 步骤 N：步骤名称\n")
+                .append("- 如果某步失败，记录失败原因后继续执行后续步骤。\n\n")
+                .append("## 执行步骤\n")
+                .append(pipeline.getSteps());
+        if (StringUtils.hasText(pipeline.getExceptionHandling())) {
+            sb.append("\n\n## 异常处理策略\n").append(pipeline.getExceptionHandling());
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 从流水线步骤 Markdown 中解析步骤总数。
+     * 匹配模式：行首 "Step N" / "步骤 N" / "### Step N" 等（不区分大小写）。
+     */
+    private int countPipelineSteps(String stepsMarkdown) {
+        if (!StringUtils.hasText(stepsMarkdown)) {
+            return 1;
+        }
+        // 匹配 "Step 1" / "步骤 1" / "Step1" 等模式
+        Matcher matcher = Pattern.compile("(?im)^(?:#{1,6}\\s+)?(?:step|步骤)\\s*(\\d+)").matcher(stepsMarkdown);
+        int maxStep = 0;
+        while (matcher.find()) {
+            int stepNum = Integer.parseInt(matcher.group(1));
+            maxStep = Math.max(maxStep, stepNum);
+        }
+        return Math.max(maxStep, 1);
     }
 
     /**
@@ -656,9 +789,17 @@ public class AgentService {
         return StringUtils.hasText(partial) ? partial + "\n\n" + reason : reason;
     }
 
-    /** AgentScope 事件 → 前端 SSE 事件；HITL 暂停时缓存待确认工具；模型调用结束时自动记录 Token 消耗；思考过程透传 */
+    /**
+     * AgentScope 事件 → 前端 SSE 事件。
+     * <p>
+     * 流水线进度追踪：当 pipeline != null 时，每次 ModelCallEndEvent 计数 +1，
+     * 发射 progress 事件（step = min(当前轮次, 总步数), total = 总步数）。
+     * 前端根据 step/total 渲染进度条。
+     */
     private ChatEvent toChatEvent(LoginUser user, String sessionId, AgentEvent event,
-                                  String providerName, String modelName) {
+                                  String providerName, String modelName, List<String> toolNames,
+                                  AgentPipeline pipeline, int pipelineTotalSteps,
+                                  AtomicInteger pipelineModelCallCount) {
         ChatEvent.ChatEventBuilder builder = ChatEvent.builder().sessionId(sessionId);
         if (event instanceof AgentStartEvent start) {
             return builder.type("start").replyId(start.getReplyId()).build();
@@ -681,7 +822,21 @@ public class AgentService {
                     .state(String.valueOf(end.getState())).build();
         } else if (event instanceof ModelCallEndEvent modelEnd) {
             // Token 自动追踪：使用回合级缓存的 provider/modelName，避免重复查库
-            recordTokenUsage(user, sessionId, modelEnd, providerName, modelName);
+            // 工具名称从外层 toolNames 列表传入（已在 map 中跟踪）
+            recordTokenUsage(user, sessionId, modelEnd, providerName, modelName, toolNames);
+            // 流水线进度事件：每次模型调用完成计数 +1，前端展示进度条
+            // step = min(当前轮次, 总步数)：Agent 可能在最后几轮做综合总结，进度不应超过 100%
+            if (pipeline != null && pipelineTotalSteps > 0) {
+                int currentCall = pipelineModelCallCount.incrementAndGet();
+                int currentStep = Math.min(currentCall, pipelineTotalSteps);
+                // 同步游标进度到 Redis：断点续跑时依赖此数据定位已完成步骤
+                pipelineCursorService.updateProgress(user.getUserId(), sessionId, currentStep);
+                return builder.type("progress")
+                        .progressStep(currentStep)
+                        .progressTotal(pipelineTotalSteps)
+                        .progressLabel(pipeline.getPipelineName())
+                        .build();
+            }
             return builder.type("ignore").build();
         } else if (event instanceof RequireUserConfirmEvent confirm) {
             // 缓存待确认工具，等待前端审批
@@ -729,7 +884,7 @@ public class AgentService {
      * DB 写入在 boundedElastic 线程池异步执行，不阻塞 SSE 事件流；失败仅告警不抛出。
      */
     private void recordTokenUsage(LoginUser user, String sessionId, ModelCallEndEvent event,
-                                  String providerName, String modelName) {
+                                  String providerName, String modelName, List<String> toolNames) {
         ChatUsage usage = event.getUsage();
         if (usage == null || usage.getTotalTokens() <= 0) {
             return;
@@ -737,6 +892,8 @@ public class AgentService {
         // 异步写入 DB：避免阻塞 SSE 事件流（每次模型调用节省 2-5ms 同步阻塞）
         Mono.fromRunnable(() -> {
             try {
+                // 工具名称：多个工具用逗号分隔
+                String toolNameStr = toolNames.isEmpty() ? null : String.join(",", toolNames);
                 tokenUsageService.recordUsage(
                         user.getUserId(),
                         user.getTenantId(),
@@ -747,10 +904,10 @@ public class AgentService {
                         usage.getInputTokens(),
                         usage.getOutputTokens(),
                         event.getReplyId(),
-                        null
+                        toolNameStr
                 );
-                log.debug("Token 已记录: user={}, input={}, output={}, total={}",
-                        user.getUsername(), usage.getInputTokens(), usage.getOutputTokens(), usage.getTotalTokens());
+                log.debug("Token 已记录: user={}, input={}, output={}, total={}, tools={}",
+                        user.getUsername(), usage.getInputTokens(), usage.getOutputTokens(), usage.getTotalTokens(), toolNameStr);
             } catch (Exception e) {
                 log.warn("Token 追踪记录失败（不影响对话）: user={}, error={}", user.getUsername(), e.getMessage());
             }

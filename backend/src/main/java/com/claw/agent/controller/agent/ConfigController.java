@@ -125,7 +125,7 @@ public class ConfigController {
      * 升级时更新配置即可触达用户，无需新增数据库表。
      */
     @Operation(summary = "版本信息", description = "获取平台版本信息（放行接口，无需登录）")
-    @GetMapping("/versionInfo")
+    @GetMapping({"/versionInfo", "/version-info"})
     @PreAuthorize("permitAll()")
     public Mono<Result<VersionInfo>> versionInfo() {
         // 登录页也需要展示品牌名，不能依赖登录用户，直接返回配置

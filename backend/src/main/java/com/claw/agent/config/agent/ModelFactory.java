@@ -77,6 +77,77 @@ public class ModelFactory {
     private static final String DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
 
     /**
+     * 各模型上下文窗口大小（tokens）：用于动态计算压缩阈值。
+     * 键为 provider:model 精确匹配或前缀匹配。
+     */
+    private static final Map<String, Integer> CONTEXT_WINDOWS = Map.ofEntries(
+            // DashScope（通义千问）
+            Map.entry("dashscope:qwen-long", 1_000_000),
+            Map.entry("dashscope:qwen-max", 32_000),
+            Map.entry("dashscope:qwen-plus", 131_000),
+            Map.entry("dashscope:qwen-turbo", 131_000),
+            Map.entry("dashscope:qwen3", 131_000),
+            // DeepSeek
+            Map.entry("deepseek:deepseek-chat", 64_000),
+            Map.entry("deepseek:deepseek-coder", 128_000),
+            Map.entry("deepseek:deepseek-v4", 64_000),
+            // OpenAI
+            Map.entry("openai:gpt-4.1", 1_047_576),
+            Map.entry("openai:gpt-4o", 128_000),
+            Map.entry("openai:o1", 200_000),
+            Map.entry("openai:o3", 200_000),
+            // Volcengine（火山方舟/豆包）
+            Map.entry("volcengine:doubao-seed", 128_000),
+            Map.entry("volcengine:doubao-lite-32k", 32_000),
+            Map.entry("volcengine:doubao-lite-128k", 128_000),
+            // Anthropic（Claude）
+            Map.entry("anthropic:claude", 200_000),
+            // Google Gemini
+            Map.entry("gemini:gemini-1.5-flash", 1_000_000),
+            Map.entry("gemini:gemini-1.5-pro", 2_000_000),
+            Map.entry("gemini:gemini-2.0", 1_048_576),
+            Map.entry("gemini:gemini-2.5", 1_048_576),
+            // Ollama（本地模型保守估计）
+            Map.entry("ollama:", 32_000)
+    );
+
+    /** 未知模型的回退上下文窗口：128k（当前主流模型的保守下限） */
+    private static final int DEFAULT_CONTEXT_WINDOW = 128_000;
+
+    /** 压缩触发比例：上下文窗口的 80%，与 ai-fusion-video 一致 */
+    public static final int COMPACTION_TRIGGER_PERCENT = 80;
+
+    /**
+     * 解析模型的上下文窗口大小（tokens）。
+     * <p>
+     * 用于动态计算压缩阈值：{@code contextWindow × 80%}，让不同模型都能充分利用上下文空间。
+     * 匹配策略：精确匹配 → 前缀匹配 → 提供商默认 → 全局回退（128k）。
+     *
+     * @param provider  提供商标识（如 openai、dashscope）
+     * @param modelName 模型名称（如 gpt-4.1-mini、qwen-plus）
+     * @return 上下文窗口大小（tokens）
+     */
+    public int resolveContextWindow(String provider, String modelName) {
+        String p = provider != null ? provider.toLowerCase(Locale.ROOT) : "";
+        String m = modelName != null ? modelName.toLowerCase(Locale.ROOT) : "";
+        // 1. 精确匹配 provider:model
+        Integer exact = CONTEXT_WINDOWS.get(p + ":" + m);
+        if (exact != null) return exact;
+        // 2. 前缀匹配（gpt-4.1-mini → gpt-4.1, deepseek-v4-flash → deepseek-v4）
+        for (Map.Entry<String, Integer> entry : CONTEXT_WINDOWS.entrySet()) {
+            String key = entry.getKey();
+            if (key.endsWith(":")) continue; // 跳过提供商默认条目
+            String keyModel = key.substring(key.indexOf(':') + 1);
+            if (m.startsWith(keyModel)) return entry.getValue();
+        }
+        // 3. 提供商默认值
+        Integer providerDefault = CONTEXT_WINDOWS.get(p + ":");
+        if (providerDefault != null) return providerDefault;
+        // 4. 全局回退
+        return DEFAULT_CONTEXT_WINDOW;
+    }
+
+    /**
      * 模型容错配置：最大重试 3 次，指数退避（1s → 2s → 4s），超时 120s。
      * 覆盖网络抖动、模型服务短暂不可用等常见故障场景。
      */
@@ -91,6 +162,7 @@ public class ModelFactory {
     /** 将容错配置包装为 GenerateOptions，供所有模型 Builder 复用 */
     private static final GenerateOptions MODEL_GENERATE_OPTIONS = GenerateOptions.builder()
             .executionConfig(MODEL_EXECUTION_CONFIG)
+            .parallelToolCalls(false)  // 关闭并行工具调用：模型每轮只能调 1 个工具，避免 web_search 一次并发 3-5 个
             .build();
 
     /** 模型实例缓存（配置指纹 → Model），相同提供商+模型参数复用实例，避免重复创建 */
