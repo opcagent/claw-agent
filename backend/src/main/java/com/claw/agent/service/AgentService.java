@@ -6,45 +6,24 @@ import com.claw.agent.common.ReactiveSupport;
 import com.claw.agent.common.ResultCode;
 import com.claw.agent.common.UserContextHolder;
 import com.claw.agent.config.agent.AgentRegistry;
+import com.claw.agent.config.agent.ModelCircuitBreaker;
 import com.claw.agent.config.infra.ClawProperties;
+import com.claw.agent.config.infra.HitlPendingStore;
 import com.claw.agent.config.infra.TraceFilter;
 import com.claw.agent.mapper.AgentPresetMapper;
 import com.claw.agent.mapper.ChatMessageMapper;
 import com.claw.agent.mapper.ChatSessionMapper;
-import com.claw.agent.model.AgentPipeline;
-import com.claw.agent.model.AgentPreset;
-import com.claw.agent.model.ChatMessage;
-import com.claw.agent.model.ChatSession;
-import com.claw.agent.model.ModelProviderConfig;
+import com.claw.agent.model.*;
 import com.claw.agent.model.dto.ChatEvent;
 import com.claw.agent.model.dto.ChatRequest;
 import com.claw.agent.security.LoginUser;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import io.agentscope.core.agent.RuntimeContext;
-import io.agentscope.core.event.AgentEndEvent;
-import io.agentscope.core.event.AgentEvent;
-import io.agentscope.core.event.AgentStartEvent;
-import io.agentscope.core.event.ConfirmResult;
-import io.agentscope.core.event.ModelCallEndEvent;
-import io.agentscope.core.event.RequireUserConfirmEvent;
-import io.agentscope.core.event.SubagentExposedEvent;
-import io.agentscope.core.event.TextBlockDeltaEvent;
-import io.agentscope.core.event.ThinkingBlockDeltaEvent;
-import io.agentscope.core.event.ThinkingBlockEndEvent;
-import io.agentscope.core.event.ThinkingBlockStartEvent;
-import io.agentscope.core.event.ToolCallStartEvent;
-import io.agentscope.core.event.ToolResultEndEvent;
-import io.agentscope.core.model.ChatUsage;
-import io.agentscope.core.message.Base64Source;
-import io.agentscope.core.message.ContentBlock;
-import io.agentscope.core.message.DataBlock;
-import io.agentscope.core.message.Msg;
-import io.agentscope.core.message.MsgRole;
-import io.agentscope.core.message.TextBlock;
-import io.agentscope.core.message.ToolUseBlock;
-import io.agentscope.core.message.UserMessage;
 import com.claw.agent.tool.DocumentParseTools;
 import com.claw.agent.tool.OcrTools;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.agentscope.core.agent.RuntimeContext;
+import io.agentscope.core.event.*;
+import io.agentscope.core.message.*;
+import io.agentscope.core.model.ChatUsage;
 import io.agentscope.harness.agent.HarnessAgent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -60,13 +39,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.Base64;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -89,8 +62,8 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 public class AgentService {
 
-    /** HITL 待确认缓存键分隔符 */
-    private static final String PENDING_KEY_SEP = "|";
+    /** HITL 待确认缓存（Redis 多实例共享，Redis 不可用时降级为内存） */
+    private final HitlPendingStore hitlPendingStore;
 
     /** 图片类 MIME 前缀（仅图片转为多模态块，其余文件以文本说明方式带入） */
     private static final String MIME_IMAGE_PREFIX = "image/";
@@ -111,9 +84,7 @@ public class AgentService {
     private final DocumentParseTools documentParseTools;
     private final SessionSummaryService sessionSummaryService;
     private final PipelineCursorService pipelineCursorService;
-
-    /** HITL：等待用户确认的工具调用（键 = username|sessionId） */
-    private final Map<String, List<ToolUseBlock>> pendingConfirms = new ConcurrentHashMap<>();
+    private final ModelCircuitBreaker circuitBreaker;
 
     /**
      * 发起（或继续）一次流式对话。
@@ -157,9 +128,9 @@ public class AgentService {
             // 此处检测内存缓存中的待确认条目，若有则视为用户放弃旧回合，启用新 sessionId
             String effectiveSessionId;
             if (StringUtils.hasText(request.getSessionId())
-                    && !pendingConfirms.getOrDefault(pendingKey(user.getUsername(), request.getSessionId()), List.of()).isEmpty()) {
+                    && hitlPendingStore.hasPending(user.getUsername(), request.getSessionId())) {
                 effectiveSessionId = UUID.randomUUID().toString().replace("-", "");
-                pendingConfirms.remove(pendingKey(user.getUsername(), request.getSessionId()));
+                hitlPendingStore.delete(user.getUsername(), request.getSessionId());
                 log.info("检测到旧 HITL 残留，启用新 sessionId: old={}, new={}", request.getSessionId(), effectiveSessionId);
             } else {
                 effectiveSessionId = initialSessionId;
@@ -199,6 +170,11 @@ public class AgentService {
                 // 提前创建 RuntimeContext + 解析模型配置，供 buildUserMessage 中 OCR 预处理使用
                 rc = runtimeContext(user, effectiveSessionId);
                 providerCfg = configService.resolveCurrentProvider(user.getTenantId(), user.getUserId());
+                // 熔断检查：提供商连续失败时快速拒绝，避免等 3 次重试超时（6 分钟）才报错
+                if (!circuitBreaker.isAvailable(providerCfg.getProvider())) {
+                    throw new BizException(ResultCode.AGENT_ERROR,
+                            circuitBreaker.getRejectionMessage(providerCfg.getProvider()));
+                }
                 msg = buildUserMessage(user, request, pipeline, rc, providerCfg);
             } catch (RuntimeException e) {
                 // 准备段异常（如模型提供商未配置 API key）发生在流式段之前，
@@ -260,10 +236,14 @@ public class AgentService {
             Flux<ChatEvent> withKeepalive = Flux.merge(eventStream, heartbeat)
                     .takeUntilOther(eventStream.ignoreElements());
             return withKeepalive
-                    .doOnComplete(() -> log.debug("Flux 完成：user={}, session={}", user.getUsername(), effectiveSessionId))
+                    .doOnComplete(() -> {
+                        log.debug("Flux 完成：user={}, session={}", user.getUsername(), effectiveSessionId);
+                        circuitBreaker.recordSuccess(providerName);
+                    })
                     .doFinally(signal -> log.debug("Flux 终止信号：user={}, session={}, signal={}", user.getUsername(), effectiveSessionId, signal))
                     .onErrorResume(e -> {
                         log.error("对话执行异常：user={}, session={}", user.getUsername(), effectiveSessionId, e);
+                        circuitBreaker.recordFailure(providerName);
                         persistMessage(user, effectiveSessionId, ChatMessage.ROLE_ASSISTANT,
                                 failureContent(replyBuffer.toString(), e), null, ChatMessage.STATUS_FAIL);
                         return Flux.just(toErrorEvent(user, effectiveSessionId, e));
@@ -303,8 +283,7 @@ public class AgentService {
 
     /** HITL 恢复执行内部实现（同步准备 + 恢复流组装） */
     private Flux<ChatEvent> doConfirmInternal(LoginUser user, String sessionId, boolean approved) {
-        String key = pendingKey(user.getUsername(), sessionId);
-        List<ToolUseBlock> pending = pendingConfirms.remove(key);
+        List<ToolUseBlock> pending = hitlPendingStore.remove(user.getUsername(), sessionId);
         if (pending == null || pending.isEmpty()) {
             throw new BizException(ResultCode.PARAM_ERROR, "当前会话没有待确认的工具调用");
         }
@@ -336,6 +315,10 @@ public class AgentService {
                 user.getUsername(), sessionId, approved, pending.size());
         // 回合级缓存模型提供商信息
         ModelProviderConfig providerCfg = configService.resolveCurrentProvider(user.getTenantId(), user.getUserId());
+        if (!circuitBreaker.isAvailable(providerCfg.getProvider())) {
+            throw new BizException(ResultCode.AGENT_ERROR,
+                    circuitBreaker.getRejectionMessage(providerCfg.getProvider()));
+        }
         String providerName = providerCfg.getProvider();
         String modelName = providerCfg.getModelName();
         // 恢复流同样累积回复并落库（本轮续接输出与主对话轮同等待遇）
@@ -356,8 +339,10 @@ public class AgentService {
                     }
                     return chatEvent;
                 })
+                .doOnComplete(() -> circuitBreaker.recordSuccess(providerName))
                 .onErrorResume(e -> {
                     log.error("HITL 恢复执行异常: user={}, session={}", user.getUsername(), sessionId, e);
+                    circuitBreaker.recordFailure(providerName);
                     persistMessage(user, sessionId, ChatMessage.ROLE_ASSISTANT,
                             failureContent(replyBuffer.toString(), e), null, ChatMessage.STATUS_FAIL);
                     return Flux.just(ChatEvent.builder().type("error")
@@ -381,6 +366,52 @@ public class AgentService {
                         .eq(ChatSession::getArchived, archived ? 1 : 0)
                         .orderByDesc(ChatSession::getUpdateTime)
                         .last("LIMIT 200"));
+    }
+
+    /**
+     * 按关键词搜索会话：在用户的聊天消息中模糊匹配，返回命中的会话列表。
+     * <p>
+     * 搜索范围：用户消息 + 助手回复的 content 字段（LIKE 模糊匹配）。
+     * 结果按消息最近匹配时间倒序，最多返回 20 条。
+     *
+     * @param user    当前登录用户
+     * @param keyword 搜索关键词（至少 1 个字符）
+     * @return 匹配的会话列表（去重，按最近匹配消息时间倒序）
+     */
+    public List<ChatSession> searchSessions(LoginUser user, String keyword) {
+        if (!StringUtils.hasText(keyword) || keyword.isBlank()) {
+            return List.of();
+        }
+        // 先从消息表中查出匹配的 sessionId（去重），再查会话详情
+        List<ChatMessage> matchedMessages = chatMessageMapper.selectList(
+                new LambdaQueryWrapper<ChatMessage>()
+                        .eq(ChatMessage::getUsername, user.getUsername())
+                        .like(ChatMessage::getContent, keyword.trim())
+                        .orderByDesc(ChatMessage::getCreateTime)
+                        .last("LIMIT 100"));
+        if (matchedMessages.isEmpty()) {
+            return List.of();
+        }
+        // 按 sessionId 去重，保留首次出现（即最新消息）的顺序
+        List<String> sessionIds = matchedMessages.stream()
+                .map(ChatMessage::getSessionId)
+                .distinct()
+                .limit(20)
+                .toList();
+        // 查询会话元数据（保持 sessionIds 的顺序）
+        List<ChatSession> sessions = chatSessionMapper.selectList(
+                new LambdaQueryWrapper<ChatSession>()
+                        .eq(ChatSession::getUsername, user.getUsername())
+                        .in(ChatSession::getSessionId, sessionIds)
+                        .eq(ChatSession::getArchived, 0));
+        // 按 sessionIds 顺序排序（保持匹配相关度）
+        Map<String, Integer> orderMap = new HashMap<>();
+        for (int i = 0; i < sessionIds.size(); i++) {
+            orderMap.put(sessionIds.get(i), i);
+        }
+        sessions.sort((a, b) -> orderMap.getOrDefault(a.getSessionId(), 999)
+                - orderMap.getOrDefault(b.getSessionId(), 999));
+        return sessions;
     }
 
     /**
@@ -466,7 +497,7 @@ public class AgentService {
         chatMessageMapper.delete(new LambdaQueryWrapper<ChatMessage>()
                 .eq(ChatMessage::getUsername, user.getUsername())
                 .eq(ChatMessage::getSessionId, sessionId));
-        pendingConfirms.remove(pendingKey(user.getUsername(), sessionId));
+        hitlPendingStore.delete(user.getUsername(), sessionId);
     }
 
     /**
@@ -536,6 +567,68 @@ public class AgentService {
         }
         session.setTitle(trimmed);
         chatSessionMapper.updateById(session);
+    }
+
+    /**
+     * 重新生成：删除会话最后一轮助手回复，重新发送最后一条用户消息。
+     * <p>
+     * 场景：用户对上次回复不满意，希望模型重新回答同一个问题。
+     * 实现：找到最后一条用户消息 → 删除其后的助手消息 → 以该用户消息发起新对话。
+     *
+     * @param user      当前登录用户
+     * @param sessionId 会话ID
+     * @return SSE 事件流（与 chat 接口行为一致）
+     */
+    public Flux<ChatEvent> regenerate(LoginUser user, String sessionId) {
+        return Flux.deferContextual(ctxView -> doRegenerate(user, sessionId,
+                        ctxView.getOrDefault(TraceFilter.CONTEXT_KEY, null)))
+                .onErrorResume(e -> Flux.just(toErrorEvent(user, sessionId, e)))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    /** 重新生成执行主体（在弹性线程池上订阅） */
+    private Flux<ChatEvent> doRegenerate(LoginUser user, String sessionId, String traceId) {
+        ReactiveSupport.putTrace(traceId);
+        try {
+            // 1. 查找最后一条用户消息
+            ChatMessage lastUserMsg = chatMessageMapper.selectOne(
+                    new LambdaQueryWrapper<ChatMessage>()
+                            .eq(ChatMessage::getSessionId, sessionId)
+                            .eq(ChatMessage::getUsername, user.getUsername())
+                            .eq(ChatMessage::getRole, ChatMessage.ROLE_USER)
+                            .orderByDesc(ChatMessage::getId)
+                            .last("LIMIT 1"));
+            if (lastUserMsg == null) {
+                throw new BizException(ResultCode.PARAM_ERROR, "会话中没有用户消息，无法重新生成");
+            }
+            // 2. 删除该用户消息之后的所有助手回复（重新生成）
+            chatMessageMapper.delete(
+                    new LambdaQueryWrapper<ChatMessage>()
+                            .eq(ChatMessage::getSessionId, sessionId)
+                            .eq(ChatMessage::getUsername, user.getUsername())
+                            .eq(ChatMessage::getRole, ChatMessage.ROLE_ASSISTANT)
+                            .gt(ChatMessage::getId, lastUserMsg.getId()));
+            log.info("重新生成: user={}, session={}, lastUserMsgId={}",
+                    user.getUsername(), sessionId, lastUserMsg.getId());
+            // 3. 构建 ChatRequest 并复用 chat 流程
+            ChatRequest request = new ChatRequest();
+            request.setSessionId(sessionId);
+            request.setContent(lastUserMsg.getContent());
+            // 解析附件
+            if (StringUtils.hasText(lastUserMsg.getAttachments())) {
+                try {
+                    List<String> attachments = objectMapper.readValue(
+                            lastUserMsg.getAttachments(),
+                            objectMapper.getTypeFactory().constructCollectionType(List.class, String.class));
+                    request.setAttachments(attachments);
+                } catch (Exception e) {
+                    log.warn("重新生成解析附件失败，忽略: session={}", sessionId, e);
+                }
+            }
+            return doChat(user, request, traceId);
+        } finally {
+            MDC.remove(TraceFilter.MDC_KEY);
+        }
     }
 
     // ------------------------------------------------------------
@@ -841,7 +934,7 @@ public class AgentService {
         } else if (event instanceof RequireUserConfirmEvent confirm) {
             // 缓存待确认工具，等待前端审批
             List<ToolUseBlock> toolCalls = confirm.getToolCalls();
-            pendingConfirms.put(pendingKey(user.getUsername(), sessionId), toolCalls);
+            hitlPendingStore.put(user.getUsername(), sessionId, toolCalls);
             List<ChatEvent.PendingToolCall> pendingList = toolCalls.stream()
                     .map(t -> ChatEvent.PendingToolCall.builder()
                             .toolCallId(t.getId())
@@ -973,11 +1066,6 @@ public class AgentService {
         rc.put("username", user.getUsername());
         rc.put("tenantId", user.getTenantId());
         return rc;
-    }
-
-    /** HITL 缓存键 */
-    private String pendingKey(String username, String sessionId) {
-        return username + PENDING_KEY_SEP + sessionId;
     }
 
     /** 按扩展名推断 MIME 类型 */

@@ -1,10 +1,14 @@
 package com.claw.agent.config;
 
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
+import com.claw.agent.config.infra.CaffeineCacheManager;
+import com.claw.agent.config.infra.RedisPubSub;
 import com.claw.agent.model.DictData;
 import com.claw.agent.model.Menu;
 import com.claw.agent.model.ModelProviderConfig;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import jakarta.annotation.PostConstruct;
+import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -17,12 +21,20 @@ import java.util.concurrent.TimeUnit;
  * 仅缓存「高频读取 + 低频变更」的数据，写入侧在对应 service 的增删改方法中
  * 手动调用 {@code cache.invalidate(...)} 保证一致性。
  * <p>
- * 与 Redis 互补：Redis 用于分布式会话状态，Caffeine 用于单机热数据缓存，
- * 多实例部署时配置变更通过 {@link com.claw.agent.service.ConfigChangedEvent}
- * 触发 Agent 热重建，间接保证各节点缓存最终一致。
+ * 多实例部署时，缓存失效通过 Redis Pub/Sub 广播到所有节点，
+ * 各节点收到 {@link RedisPubSub#EVT_CACHE_INVALIDATE} 事件后失效本地 Caffeine 缓存。
  */
 @Configuration
+@RequiredArgsConstructor
 public class CacheConfig {
+
+    private final CaffeineCacheManager caffeineCacheManager;
+    private final RedisPubSub redisPubSub;
+
+    @PostConstruct
+    public void registerCaches() {
+        // 缓存注册延迟到 @PostConstruct，此时所有 Bean 已创建
+    }
 
     /**
      * 配置单键值缓存（agent_config 表）。
@@ -33,10 +45,12 @@ public class CacheConfig {
      */
     @Bean
     public Cache<String, String> configValueCache() {
-        return Caffeine.newBuilder()
+        Cache<String, String> cache = Caffeine.newBuilder()
                 .maximumSize(500)
                 .expireAfterWrite(30, TimeUnit.MINUTES)
                 .build();
+        caffeineCacheManager.register("configValueCache", cache);
+        return cache;
     }
 
     /**
@@ -49,10 +63,12 @@ public class CacheConfig {
      */
     @Bean
     public Cache<String, ModelProviderConfig> providerConfigCache() {
-        return Caffeine.newBuilder()
+        Cache<String, ModelProviderConfig> cache = Caffeine.newBuilder()
                 .maximumSize(50)
                 .expireAfterWrite(30, TimeUnit.MINUTES)
                 .build();
+        caffeineCacheManager.register("providerConfigCache", cache);
+        return cache;
     }
 
     /**
@@ -63,10 +79,12 @@ public class CacheConfig {
      */
     @Bean
     public Cache<String, List<Menu>> menuCache() {
-        return Caffeine.newBuilder()
+        Cache<String, List<Menu>> cache = Caffeine.newBuilder()
                 .maximumSize(5)
                 .expireAfterWrite(60, TimeUnit.MINUTES)
                 .build();
+        caffeineCacheManager.register("menuCache", cache);
+        return cache;
     }
 
     /**
@@ -77,9 +95,11 @@ public class CacheConfig {
      */
     @Bean
     public Cache<String, List<DictData>> dictDataCache() {
-        return Caffeine.newBuilder()
+        Cache<String, List<DictData>> cache = Caffeine.newBuilder()
                 .maximumSize(200)
                 .expireAfterWrite(30, TimeUnit.MINUTES)
                 .build();
+        caffeineCacheManager.register("dictDataCache", cache);
+        return cache;
     }
 }

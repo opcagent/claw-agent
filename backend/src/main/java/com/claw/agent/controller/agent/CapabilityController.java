@@ -1,33 +1,24 @@
 package com.claw.agent.controller.agent;
 
-import com.claw.agent.common.BizException;
-import com.claw.agent.common.OperType;
-import com.claw.agent.common.ReactiveSupport;
-import com.claw.agent.common.Result;
-import com.claw.agent.common.ResultCode;
+import com.claw.agent.common.*;
 import com.claw.agent.mapper.UserMapper;
+import com.claw.agent.mapper.UserTenantMapper;
 import com.claw.agent.model.McpServer;
 import com.claw.agent.model.ToolConfig;
 import com.claw.agent.model.User;
+import com.claw.agent.model.UserTenant;
 import com.claw.agent.model.dto.SkillInfo;
 import com.claw.agent.model.dto.ToolKeyInfo;
 import com.claw.agent.security.LoginUser;
 import com.claw.agent.service.CapabilityService;
 import com.claw.agent.service.ConfigService;
-import lombok.Data;
-import io.swagger.v3.oas.annotations.tags.Tag;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.util.StringUtils;
-import org.springframework.web.bind.annotation.DeleteMapping;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
 
 import java.util.List;
@@ -52,6 +43,7 @@ public class CapabilityController {
 
     private final CapabilityService capabilityService;
     private final UserMapper userMapper;
+    private final UserTenantMapper userTenantMapper;
 
     // ------------------------------------------------------------
     // MCP 服务器
@@ -135,8 +127,8 @@ public class CapabilityController {
     @GetMapping("/skills")
     public Mono<Result<List<SkillInfo>>> listSkills(@RequestParam(required = false) String username) {
         return ReactiveSupport.call(user -> {
-            User target = resolveTarget(user, username);
-            return capabilityService.listUserSkills(target.getTenantId(), target.getUsername());
+            TargetRef target = resolveTarget(user, username);
+            return capabilityService.listUserSkills(target.tenantId, target.username);
         });
     }
 
@@ -145,9 +137,9 @@ public class CapabilityController {
     @PostMapping("/skillToggle")
     public Mono<Result<Void>> toggleSkill(@RequestBody SkillToggleRequest request) {
         return ReactiveSupport.run(MODULE, OperType.UPDATE, "切换技能启停", user -> {
-            User target = resolveTarget(user, request.getUsername());
+            TargetRef target = resolveTarget(user, request.getUsername());
             capabilityService.saveSkillConfig(ConfigService.SCOPE_USER,
-                    target.getTenantId(), target.getUsername(),
+                    target.tenantId, target.username,
                     request.getSkillName(), Boolean.FALSE.equals(request.getEnabled()) ? 0 : 1);
         });
     }
@@ -173,12 +165,9 @@ public class CapabilityController {
      * 解析技能接口的目标用户：入参为空即本人；
      * 他人则要求平台管理员，或租户管理员且目标在同一租户（防跨租户越权）。
      */
-    private User resolveTarget(LoginUser user, String username) {
+    private TargetRef resolveTarget(LoginUser user, String username) {
         if (!StringUtils.hasText(username) || username.equals(user.getUsername())) {
-            User self = new User();
-            self.setTenantId(user.getTenantId());
-            self.setUsername(user.getUsername());
-            return self;
+            return new TargetRef(user.getUsername(), user.getTenantId());
         }
         User target = userMapper.selectOne(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<User>()
                 .eq(User::getUsername, username)
@@ -187,14 +176,27 @@ public class CapabilityController {
             throw new BizException(ResultCode.NOT_FOUND, "目标用户不存在");
         }
         if (user.isAdmin()) {
-            return target;
+            // admin 跨租户：从 sys_user_tenant 取目标用户归属组织
+            UserTenant ut = userTenantMapper.selectOne(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<UserTenant>()
+                    .eq(UserTenant::getUserId, target.getId())
+                    .eq(UserTenant::getStatus, 1)
+                    .last("LIMIT 1"));
+            return new TargetRef(target.getUsername(), ut != null ? ut.getTenantId() : null);
         }
-        if (user.isTenantAdmin() && target.getTenantId() != null
-                && target.getTenantId().equals(user.getTenantId())) {
-            return target;
+        // 租户管理员：校验目标用户是否在同一组织
+        UserTenant ut = userTenantMapper.selectOne(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<UserTenant>()
+                .eq(UserTenant::getUserId, target.getId())
+                .eq(UserTenant::getTenantId, user.getTenantId())
+                .eq(UserTenant::getStatus, 1)
+                .last("LIMIT 1"));
+        if (user.isTenantAdmin() && ut != null) {
+            return new TargetRef(target.getUsername(), user.getTenantId());
         }
         throw new BizException(ResultCode.FORBIDDEN, "无权管理该用户的技能");
     }
+
+    /** 目标用户引用（username + tenantId，替代旧 User 实体上已删除的字段） */
+    private record TargetRef(String username, Long tenantId) {}
 
     /** 解析目标作用域的租户ID（GLOBAL 固定 0；TENANT/USER 取本人租户） */
     private Long resolveTenantId(LoginUser user, String scope) {

@@ -1,25 +1,32 @@
 package com.claw.agent.config.infra;
 
-import io.lettuce.core.RedisClient;
-import io.lettuce.core.RedisURI;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.autoconfigure.data.redis.RedisProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import org.springframework.util.StringUtils;
 
-import java.time.Duration;
-
 /**
- * Redis 可选配置：启动时自动探测 Redis 可用性，连接失败则跳过 Redis 初始化。
+ * Redis 可选配置（统一入口）：启动时探测 Redis 可用性，可用则创建全部基础设施 Bean。
  * <p>
  * 当 {@code claw.redis.enabled} 不为 {@code false} 时激活（默认 {@code auto} 自动探测）；
- * 显式设为 {@code false} 则整个 Bean 不加载，AgentRegistry 直接走 JSON 存储。
+ * 显式设为 {@code false} 则整个配置类不加载，所有组件降级为内存模式。
  * <p>
- * 探测逻辑：尝试建立连接并执行 PING，失败则记录 WARN 日志并标记 {@link #redisAvailable} 为 false，
- * AgentRegistry 据此降级到 {@code JsonFileAgentStateStore}。
+ * 设计要点：
+ * <ul>
+ *   <li>{@link RedisAvailableCondition} 在 REGISTER_BEAN 阶段自行从 Environment 读取配置并探测，
+ *       结果缓存在静态字段，不依赖任何 Bean 实例化</li>
+ *   <li>{@link #redisAvailable} 复用 Condition 缓存的探测结果，避免重复连接</li>
+ *   <li>基础设施 Bean（连接工厂/Template/监听容器）使用 {@link RedisAvailableCondition}
+ *       控制创建</li>
+ * </ul>
  */
 @Slf4j
 @Configuration
@@ -28,51 +35,52 @@ import java.time.Duration;
 public class RedisOptionalConfig {
 
     /**
-     * Redis 可用性探测结果：启动时尝试连接 Redis，成功返回 true，失败返回 false。
+     * Redis 可用性探测结果：复用 {@link RedisAvailableCondition} 已缓存的探测结果。
+     * <p>
+     * Condition 在 REGISTER_BEAN 阶段先于本 Bean 实例化执行，缓存已写入；
      * AgentRegistry 通过注入此 Bean 判断是否使用 Redis 状态存储。
      */
     @Bean
-    public Boolean redisAvailable(RedisProperties redisProperties, ClawProperties clawProperties) {
-        String mode = clawProperties.getRedis().getEnabled();
-        // 显式禁用不应走到这里（ConditionalOnProperty 已拦截），防御性检查
-        if ("false".equalsIgnoreCase(mode)) {
-            log.info("Redis 已显式禁用（claw.redis.enabled=false），使用本地 JSON 存储");
-            return false;
-        }
-        // auto 模式或 true：尝试连接
-        return probeRedis(redisProperties);
+    public Boolean redisAvailable() {
+        return RedisAvailableCondition.cachedResult();
     }
 
     /**
-     * 尝试连接 Redis 并执行 PING，返回是否可用。
+     * Lettuce 连接工厂：基于 Spring RedisProperties 构建，供 StringRedisTemplate 使用。
      */
-    private boolean probeRedis(RedisProperties props) {
-        RedisURI.Builder uriBuilder = RedisURI.builder()
-                .withHost(props.getHost())
-                .withPort(props.getPort())
-                .withDatabase(props.getDatabase())
-                .withTimeout(Duration.ofSeconds(3));
-        if (StringUtils.hasText(props.getPassword())) {
-            uriBuilder.withPassword(props.getPassword().toCharArray());
+    @Bean
+    @Conditional(RedisAvailableCondition.class)
+    public LettuceConnectionFactory lettuceConnectionFactory(RedisProperties redisProperties) {
+        RedisStandaloneConfiguration config = new RedisStandaloneConfiguration();
+        config.setHostName(redisProperties.getHost());
+        config.setPort(redisProperties.getPort());
+        config.setDatabase(redisProperties.getDatabase());
+        if (StringUtils.hasText(redisProperties.getPassword())) {
+            config.setPassword(redisProperties.getPassword());
         }
-        RedisClient client = null;
-        try {
-            client = RedisClient.create(uriBuilder.build());
-            var connection = client.connect();
-            String pong = connection.sync().ping();
-            connection.close();
-            if ("PONG".equalsIgnoreCase(pong)) {
-                log.info("Redis 探测成功: {}:{}, database={}", props.getHost(), props.getPort(), props.getDatabase());
-                return true;
-            }
-        } catch (Exception e) {
-            log.warn("Redis 连接失败: {}:{} — 将降级为本地 JSON 文件存储。原因: {}",
-                    props.getHost(), props.getPort(), e.getMessage());
-        } finally {
-            if (client != null) {
-                client.shutdown();
-            }
-        }
-        return false;
+        LettuceConnectionFactory factory = new LettuceConnectionFactory(config);
+        factory.afterPropertiesSet();
+        log.info("Lettuce 连接工厂已初始化: {}:{}/{}", redisProperties.getHost(), redisProperties.getPort(), redisProperties.getDatabase());
+        return factory;
+    }
+
+    /**
+     * StringRedisTemplate：多实例共享状态的核心操作入口。
+     */
+    @Bean
+    @Conditional(RedisAvailableCondition.class)
+    public StringRedisTemplate stringRedisTemplate(LettuceConnectionFactory factory) {
+        return new StringRedisTemplate(factory);
+    }
+
+    /**
+     * Redis Pub/Sub 消息监听容器：配置变更 / 缓存失效广播的订阅基础设施。
+     */
+    @Bean
+    @Conditional(RedisAvailableCondition.class)
+    public RedisMessageListenerContainer redisMessageListenerContainer(LettuceConnectionFactory factory) {
+        RedisMessageListenerContainer container = new RedisMessageListenerContainer();
+        container.setConnectionFactory(factory);
+        return container;
     }
 }

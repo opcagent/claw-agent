@@ -4,7 +4,6 @@ import com.claw.agent.common.ToolCodes;
 import com.claw.agent.config.infra.HttpProxyConfig;
 import com.claw.agent.service.ConfigService;
 import com.claw.agent.tool.MultiSearchTools;
-import com.claw.agent.tool.NoteTools;
 import com.claw.agent.tool.OcrTools;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;

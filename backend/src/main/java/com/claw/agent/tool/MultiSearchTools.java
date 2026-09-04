@@ -1,7 +1,7 @@
 package com.claw.agent.tool;
 
-import com.claw.agent.config.infra.HttpProxyConfig;
 import com.claw.agent.common.ToolCodes;
+import com.claw.agent.config.infra.HttpProxyConfig;
 import com.claw.agent.config.tool.SearchEngineConfig;
 import com.claw.agent.service.ConfigService;
 import com.claw.agent.tool.annotation.ToolSet;

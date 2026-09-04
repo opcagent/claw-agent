@@ -5,20 +5,8 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.claw.agent.common.BizException;
 import com.claw.agent.common.ResultCode;
 import com.claw.agent.common.RoleConstants;
-import com.claw.agent.mapper.DeptMapper;
-import com.claw.agent.mapper.MenuMapper;
-import com.claw.agent.mapper.RoleMapper;
-import com.claw.agent.mapper.RoleMenuMapper;
-import com.claw.agent.mapper.TenantMapper;
-import com.claw.agent.mapper.UserMapper;
-import com.claw.agent.mapper.UserTenantMapper;
-import com.claw.agent.model.Dept;
-import com.claw.agent.model.Menu;
-import com.claw.agent.model.Role;
-import com.claw.agent.model.RoleMenu;
-import com.claw.agent.model.Tenant;
-import com.claw.agent.model.User;
-import com.claw.agent.model.UserTenant;
+import com.claw.agent.mapper.*;
+import com.claw.agent.model.*;
 import com.claw.agent.model.dto.SetAdminRequest;
 import com.claw.agent.model.dto.TenantCreateWithAdminRequest;
 import com.claw.agent.security.LoginUser;
@@ -28,6 +16,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
 import java.util.List;
 
 /**
@@ -108,10 +97,17 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, Tenant> impleme
             throw new BizException(ResultCode.NOT_FOUND, "租户不存在");
         }
 
-        // 2. 检查用户是否存在且属于该租户
+        // 2. 检查用户是否存在且属于该租户（通过 sys_user_tenant 关联校验）
         User user = userMapper.selectById(request.getUserId());
-        if (user == null || !tenantId.equals(user.getTenantId())) {
-            throw new BizException(ResultCode.PARAM_ERROR, "用户不存在或不属于该租户");
+        if (user == null) {
+            throw new BizException(ResultCode.PARAM_ERROR, "用户不存在");
+        }
+        Long utCount = userTenantMapper.selectCount(new LambdaQueryWrapper<UserTenant>()
+                .eq(UserTenant::getUserId, user.getId())
+                .eq(UserTenant::getTenantId, tenantId)
+                .eq(UserTenant::getStatus, 1));
+        if (utCount == null || utCount == 0) {
+            throw new BizException(ResultCode.PARAM_ERROR, "用户不属于该租户");
         }
 
         // 3. 查找该租户的 tenant_admin 角色
@@ -129,8 +125,7 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, Tenant> impleme
                 .eq(UserTenant::getUserId, user.getId())
                 .eq(UserTenant::getTenantId, tenantId)
                 .last("LIMIT 1"));
-        Long preservedDeptId = existingUt != null && existingUt.getDeptId() != null
-                ? existingUt.getDeptId() : user.getDeptId();
+        Long preservedDeptId = existingUt != null ? existingUt.getDeptId() : null;
         String preservedPosition = existingUt != null ? existingUt.getPosition() : null;
 
         userTenantMapper.delete(new LambdaQueryWrapper<UserTenant>()
@@ -196,7 +191,6 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, Tenant> impleme
 
             // 创建管理员用户并建立组织关联
             User adminUser = new User();
-            adminUser.setTenantId(tenant.getId());
             adminUser.setUsername(request.getAdminUsername().trim());
             adminUser.setPassword(passwordEncoder.encode(request.getAdminPassword()));
             adminUser.setNickname(request.getAdminNickname());

@@ -8,6 +8,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration;
 import org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration;
+import org.springframework.boot.autoconfigure.quartz.QuartzAutoConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
@@ -28,7 +29,10 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @Slf4j
 @SpringBootApplication(exclude = {
         RedisAutoConfiguration.class,
-        RedisRepositoriesAutoConfiguration.class
+        RedisRepositoriesAutoConfiguration.class,
+        // Quartz Scheduler 由 QuartzSchedulerConfig 手动管理（RAMJobStore + 自定义 Job 注册），
+        // 排除 Spring Boot 自动配置避免 Bean 名称冲突
+        QuartzAutoConfiguration.class
 })
 public class ClawAgentApplication {
 

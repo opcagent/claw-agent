@@ -1,9 +1,9 @@
 package com.claw.agent.tool;
 
+import com.claw.agent.common.ToolCodes;
 import com.claw.agent.model.EmailConfig;
 import com.claw.agent.security.SecurityUtil;
 import com.claw.agent.service.EmailService;
-import com.claw.agent.common.ToolCodes;
 import com.claw.agent.tool.annotation.ToolSet;
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;

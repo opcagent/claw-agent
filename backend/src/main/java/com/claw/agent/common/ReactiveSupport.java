@@ -1,7 +1,7 @@
 package com.claw.agent.common;
 
-import com.claw.agent.config.security.ClientIpFilter;
 import com.claw.agent.config.infra.TraceFilter;
+import com.claw.agent.config.security.ClientIpFilter;
 import com.claw.agent.mapper.OperLogMapper;
 import com.claw.agent.model.OperLog;
 import com.claw.agent.security.LoginUser;

@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.claw.agent.common.BizException;
 import com.claw.agent.common.ResultCode;
+import com.claw.agent.config.infra.RedisPubSub;
 import com.claw.agent.mapper.MenuMapper;
 import com.claw.agent.mapper.RoleMapper;
 import com.claw.agent.mapper.RoleMenuMapper;
@@ -37,6 +38,8 @@ public class MenuServiceImpl extends ServiceImpl<MenuMapper, Menu> implements Me
     private final RoleMenuMapper roleMenuMapper;
     /** 启用菜单缓存（所有用户共享同一份快照） */
     private final Cache<String, List<Menu>> menuCache;
+    /** Redis Pub/Sub（可选：未安装 Redis 时为 null，缓存失效仅本地） */
+    private final RedisPubSub redisPubSub;
 
     /** 菜单缓存键（全局唯一，因为菜单是平台级数据） */
     private static final String MENU_CACHE_KEY = "enabled_menus";
@@ -64,6 +67,7 @@ public class MenuServiceImpl extends ServiceImpl<MenuMapper, Menu> implements Me
         baseMapper.insert(menu);
         // 菜单变更清空缓存
         menuCache.invalidateAll();
+        if (redisPubSub != null) redisPubSub.publishCacheInvalidate("menuCache");
     }
 
     @Override
@@ -103,6 +107,7 @@ public class MenuServiceImpl extends ServiceImpl<MenuMapper, Menu> implements Me
         baseMapper.updateById(existed);
         // 菜单变更清空缓存
         menuCache.invalidateAll();
+        if (redisPubSub != null) redisPubSub.publishCacheInvalidate("menuCache");
     }
 
     @Override
@@ -122,6 +127,7 @@ public class MenuServiceImpl extends ServiceImpl<MenuMapper, Menu> implements Me
         baseMapper.deleteById(id);
         // 菜单变更清空缓存
         menuCache.invalidateAll();
+        if (redisPubSub != null) redisPubSub.publishCacheInvalidate("menuCache");
     }
 
     @Override

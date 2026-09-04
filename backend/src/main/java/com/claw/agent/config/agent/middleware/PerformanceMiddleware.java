@@ -3,11 +3,7 @@ package com.claw.agent.config.agent.middleware;
 import io.agentscope.core.agent.Agent;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.event.AgentEvent;
-import io.agentscope.core.middleware.AgentInput;
-import io.agentscope.core.middleware.MiddlewareBase;
-import io.agentscope.core.middleware.ModelCallInput;
-import io.agentscope.core.middleware.ReasoningInput;
-import io.agentscope.core.middleware.ActingInput;
+import io.agentscope.core.middleware.*;
 import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Flux;
 

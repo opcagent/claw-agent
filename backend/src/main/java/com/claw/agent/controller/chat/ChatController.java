@@ -1,7 +1,11 @@
 package com.claw.agent.controller.chat;
 
+import com.claw.agent.common.BizException;
 import com.claw.agent.common.ReactiveSupport;
 import com.claw.agent.common.Result;
+import com.claw.agent.common.ResultCode;
+import com.claw.agent.config.infra.GracefulShutdownManager;
+import com.claw.agent.config.infra.RateLimiter;
 import com.claw.agent.model.ChatMessage;
 import com.claw.agent.model.ChatSession;
 import com.claw.agent.model.dto.ChatEvent;
@@ -10,8 +14,8 @@ import com.claw.agent.model.dto.ConfirmRequest;
 import com.claw.agent.model.dto.RenameSessionRequest;
 import com.claw.agent.security.SecurityUtil;
 import com.claw.agent.service.AgentService;
-import io.swagger.v3.oas.annotations.tags.Tag;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
@@ -19,15 +23,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.web.bind.annotation.DeleteMapping;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.PutMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -52,30 +48,73 @@ import java.util.List;
 public class ChatController {
 
     private final AgentService agentService;
+    private final GracefulShutdownManager shutdownManager;
+    private final RateLimiter rateLimiter;
 
     /** 发起流式对话（SSE）；sessionId 为空时服务端新建会话 */
     @Operation(summary = "流式对话", description = "发起 SSE 流式对话，sessionId 为空时服务端新建会话")
     @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<ServerSentEvent<ChatEvent>> stream(@RequestBody ChatRequest request) {
+        // 优雅停机：停机中拒绝新 SSE 请求，前端收到 503 提示用户稍后重试
+        if (shutdownManager.isShuttingDown()) {
+            throw new BizException(ResultCode.SERVICE_UNAVAILABLE);
+        }
+        // 全局并发保护：超出上限时快速拒绝，避免排队等待占用连接
+        if (!rateLimiter.tryAcquireGlobal()) {
+            throw new BizException(ResultCode.RATE_LIMITED, "系统繁忙，当前并发请求过多，请稍后再试");
+        }
+        // acquire 必须在 doOnSubscribe 内调用（订阅期），与 doFinally 的 release 配对；
+        // 若放在方法体（装配期），Flux 装配后未订阅时 activeStreams 只增不减 → 泄漏
         return SecurityUtil.currentUser()
-                .flatMapMany(user -> agentService.chat(user, request))
+                .flatMapMany(user -> {
+                    // 用户级限流：滑动窗口内请求过多，返回空流由 switchIfEmpty 转错误
+                    if (!rateLimiter.tryAcquireUser(user.getUsername())) {
+                        return Flux.<ChatEvent>empty();
+                    }
+                    return agentService.chat(user, request);
+                })
+                // 用户限流返回空流时，统一转为限流错误（doFinally 负责释放 acquire + global）
+                .switchIfEmpty(Flux.error(new BizException(ResultCode.RATE_LIMITED,
+                        "请求过于频繁，请稍后重试")))
                 .map(event -> ServerSentEvent.<ChatEvent>builder()
                         .event(event.getType())
                         .data(event)
-                        .build());
+                        .build())
+                .doOnSubscribe(sub -> shutdownManager.acquire())
+                .doFinally(signal -> {
+                    shutdownManager.release();
+                    rateLimiter.releaseGlobal();
+                });
     }
 
     /** HITL 确认：允许/拒绝待确认的工具调用，恢复执行（SSE） */
     @Operation(summary = "HITL 确认", description = "允许/拒绝待确认的工具调用，恢复 Agent 执行（SSE）")
     @PostMapping(value = "/confirm", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<ServerSentEvent<ChatEvent>> confirm(@RequestBody ConfirmRequest request) {
+        if (shutdownManager.isShuttingDown()) {
+            throw new BizException(ResultCode.SERVICE_UNAVAILABLE);
+        }
+        if (!rateLimiter.tryAcquireGlobal()) {
+            throw new BizException(ResultCode.RATE_LIMITED, "系统繁忙，请稍后再试");
+        }
         return SecurityUtil.currentUser()
-                .flatMapMany(user -> agentService.confirm(user, request.getSessionId(),
-                        Boolean.TRUE.equals(request.getApproved())))
+                .flatMapMany(user -> {
+                    if (!rateLimiter.tryAcquireUser(user.getUsername())) {
+                        return Flux.<ChatEvent>empty();
+                    }
+                    return agentService.confirm(user, request.getSessionId(),
+                            Boolean.TRUE.equals(request.getApproved()));
+                })
+                .switchIfEmpty(Flux.error(new BizException(ResultCode.RATE_LIMITED)))
                 .map(event -> ServerSentEvent.<ChatEvent>builder()
                         .event(event.getType())
                         .data(event)
-                        .build());
+                        .build())
+                .doOnSubscribe(sub -> shutdownManager.acquire())
+                .doFinally(signal -> {
+                    shutdownManager.release();
+                    rateLimiter.releaseGlobal();
+                });
     }
 
     /** 当前用户的会话列表（按活跃时间倒序，默认只返回活跃会话） */
@@ -86,11 +125,47 @@ public class ChatController {
         return ReactiveSupport.call(user -> agentService.listSessions(user, archived));
     }
 
+    /** 按关键词搜索会话（在聊天消息中模糊匹配，返回命中的会话列表） */
+    @Operation(summary = "搜索会话", description = "按关键词搜索聊天消息，返回匹配的会话列表")
+    @GetMapping("/sessions/search")
+    public Mono<Result<List<ChatSession>>> searchSessions(@RequestParam String keyword) {
+        return ReactiveSupport.call(user -> agentService.searchSessions(user, keyword));
+    }
+
     /** 指定会话的聊天记录（仅本人会话，时间正序；归属校验在 Service 层） */
     @Operation(summary = "聊天记录", description = "获取指定会话的聊天记录，时间正序")
     @GetMapping("/sessions/{sessionId}/messages")
     public Mono<Result<List<ChatMessage>>> messages(@PathVariable String sessionId) {
         return ReactiveSupport.call(user -> agentService.listMessages(user, sessionId));
+    }
+
+    /** 重新生成：删除最后一轮助手回复，重新发送最后一条用户消息（SSE） */
+    @Operation(summary = "重新生成", description = "删除最后一轮助手回复，重新发送最后一条用户消息")
+    @PostMapping(value = "/regenerate", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<ServerSentEvent<ChatEvent>> regenerate(@RequestParam String sessionId) {
+        if (shutdownManager.isShuttingDown()) {
+            throw new BizException(ResultCode.SERVICE_UNAVAILABLE);
+        }
+        if (!rateLimiter.tryAcquireGlobal()) {
+            throw new BizException(ResultCode.RATE_LIMITED, "系统繁忙，请稍后再试");
+        }
+        return SecurityUtil.currentUser()
+                .flatMapMany(user -> {
+                    if (!rateLimiter.tryAcquireUser(user.getUsername())) {
+                        return Flux.<ChatEvent>empty();
+                    }
+                    return agentService.regenerate(user, sessionId);
+                })
+                .switchIfEmpty(Flux.error(new BizException(ResultCode.RATE_LIMITED)))
+                .map(event -> ServerSentEvent.<ChatEvent>builder()
+                        .event(event.getType())
+                        .data(event)
+                        .build())
+                .doOnSubscribe(sub -> shutdownManager.acquire())
+                .doFinally(signal -> {
+                    shutdownManager.release();
+                    rateLimiter.releaseGlobal();
+                });
     }
 
     /** 删除会话（元数据 + 聊天记录级联清理） */

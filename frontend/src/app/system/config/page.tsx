@@ -86,15 +86,15 @@ const MCP_TRANSPORTS = [
   { value: "streamable-http", label: "Streamable HTTP" },
 ];
 
-/** 配置页左侧菜单项（adminOnly 标记仅平台管理员可见，minRole 标记最低角色要求） */
-const CONFIG_MENU: { key: string; label: string; icon: typeof Bot; comment: string; adminOnly?: boolean; minRole?: "tenant_admin" }[] = [
-  { key: "model", label: "模型提供商", icon: Bot, comment: "模型提供商卡片" },
-  { key: "params", label: "运行参数", icon: Settings, comment: "运行参数卡片", minRole: "tenant_admin" },
-  { key: "tools", label: "工具集管理", icon: Wrench, comment: "工具集管理卡片", adminOnly: true },
-  { key: "search", label: "搜索引擎", icon: Search, comment: "搜索引擎 API Key 配置卡片", minRole: "tenant_admin" },
-  { key: "mcp", label: "MCP 服务器", icon: Database, comment: "MCP 服务器", minRole: "tenant_admin" },
-  { key: "skills", label: "技能管理", icon: Code, comment: "技能管理卡片", minRole: "tenant_admin" },
-  { key: "system", label: "平台配置", icon: Package, comment: "平台系统配置", adminOnly: true },
+/** 配置页左侧菜单项：perm 对应 sys_menu F 类型权限标识，通过角色授权页面灵活配置 */
+const CONFIG_MENU: { key: string; label: string; icon: typeof Bot; comment: string; perm: string }[] = [
+  { key: "model", label: "模型提供商", icon: Bot, comment: "模型提供商卡片", perm: "agent:model:view" },
+  { key: "params", label: "运行参数", icon: Settings, comment: "运行参数卡片", perm: "agent:param:view" },
+  { key: "tools", label: "工具集管理", icon: Wrench, comment: "工具集管理卡片", perm: "agent:tool:view" },
+  { key: "search", label: "搜索引擎", icon: Search, comment: "搜索引擎 API Key 配置卡片", perm: "agent:search:view" },
+  { key: "mcp", label: "MCP 服务器", icon: Database, comment: "MCP 服务器", perm: "agent:mcp:view" },
+  { key: "skills", label: "技能管理", icon: Code, comment: "技能管理卡片", perm: "agent:skill:view" },
+  { key: "system", label: "平台配置", icon: Package, comment: "平台系统配置", perm: "agent:system:view" },
 ];
 
 function ConfigPage() {
@@ -136,12 +136,9 @@ function ConfigPage() {
   const [editSearchValue, setEditSearchValue] = useState<string>("");
   const [savingSearch, setSavingSearch] = useState(false);
 
-  // 按角色过滤侧边栏：adminOnly 仅平台管理员可见；minRole=tenant_admin 需租户管理员及以上
-  const visibleMenu = CONFIG_MENU.filter((item) => {
-    if (item.adminOnly) return isAdmin;
-    if (item.minRole === "tenant_admin") return isTenantAdmin;
-    return true;
-  });
+  // 按权限标识过滤侧边栏：权限来自 sys_role_menu 授权，管理员可在「菜单权限」页面灵活配置
+  const hasPerm = useAuthStore((s) => s.hasPerm);
+  const visibleMenu = CONFIG_MENU.filter((item) => hasPerm(item.perm));
 
   // 左侧菜单导航：hash 同步，URL 与菜单名一致
   const [activeTab, setActiveTab] = useState(visibleMenu[0]?.key ?? "model");

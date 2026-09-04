@@ -3,17 +3,19 @@ package com.claw.agent.config.agent;
 import com.claw.agent.common.BizException;
 import com.claw.agent.common.ResultCode;
 import com.claw.agent.common.ToolCodes;
+import com.claw.agent.config.agent.middleware.GuardrailsMiddleware;
+import com.claw.agent.config.agent.middleware.PerformanceMiddleware;
+import com.claw.agent.config.agent.middleware.ToolCheckMiddleware;
 import com.claw.agent.config.infra.ClawProperties;
+import com.claw.agent.config.infra.RedisPubSub;
 import com.claw.agent.config.tool.ToolRegistry;
 import com.claw.agent.mapper.TenantMapper;
 import com.claw.agent.model.ModelProviderConfig;
 import com.claw.agent.model.Tenant;
-import com.claw.agent.service.CapabilityService;
-import com.claw.agent.service.ConfigChangedEvent;
-import com.claw.agent.service.ConfigService;
-import com.claw.agent.service.EmailService;
-import com.claw.agent.service.SessionSummaryService;
-import com.claw.agent.tool.*;
+import com.claw.agent.service.*;
+import com.claw.agent.tool.EmailTools;
+import com.claw.agent.tool.KnowledgeSearchTools;
+import com.claw.agent.tool.NoteTools;
 import io.agentscope.core.model.ExecutionConfig;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.permission.PermissionBehavior;
@@ -24,17 +26,14 @@ import io.agentscope.core.state.AgentStateStore;
 import io.agentscope.core.state.JsonFileAgentStateStore;
 import io.agentscope.core.tool.Toolkit;
 import io.agentscope.extensions.redis.state.RedisAgentStateStore;
-import io.agentscope.harness.agent.subagent.SubagentDeclaration;
-import io.agentscope.harness.agent.subagent.WorkspaceMode;
 import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.harness.agent.memory.MemoryConfig;
 import io.agentscope.harness.agent.memory.compaction.CompactionConfig;
 import io.agentscope.harness.agent.memory.compaction.ToolResultEvictionConfig;
 import io.agentscope.harness.agent.middleware.AgentTraceMiddleware;
-import com.claw.agent.config.agent.middleware.GuardrailsMiddleware;
-import com.claw.agent.config.agent.middleware.PerformanceMiddleware;
-import com.claw.agent.config.agent.middleware.ToolCheckMiddleware;
 import io.agentscope.harness.agent.skill.curator.SkillCuratorConfig;
+import io.agentscope.harness.agent.subagent.SubagentDeclaration;
+import io.agentscope.harness.agent.subagent.WorkspaceMode;
 import io.agentscope.harness.agent.tool.SkillManageConfig;
 import io.agentscope.harness.agent.tools.McpServerConfig;
 import io.agentscope.harness.agent.tools.McpServerRegistrar;
@@ -56,12 +55,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -189,6 +183,10 @@ public class AgentRegistry {
     @Autowired(required = false)
     private Boolean redisAvailable = false;
 
+    /** Redis Pub/Sub（可选：未安装 Redis 时为 null，配置变更仅本地失效） */
+    @Autowired(required = false)
+    private RedisPubSub redisPubSub;
+
     /**
      * 获取（或构建）用户的 Agent 实例。
      *
@@ -212,6 +210,28 @@ public class AgentRegistry {
         log.info("Agent 缓存已失效: {}", userId);
     }
 
+    /** 失效全部 Agent 缓存（全局配置变更时调用） */
+    public void invalidateAll() {
+        agents.clear();
+        log.info("Agent 全部缓存已清空");
+    }
+
+    /**
+     * 按租户 ID 失效该租户下所有用户的 Agent 缓存。
+     *
+     * @param tenantId 租户 ID
+     */
+    public void invalidateByTenant(Long tenantId) {
+        Iterator<Map.Entry<String, Long>> it = userTenants.entrySet().iterator();
+        while (it.hasNext()) {
+            Map.Entry<String, Long> entry = it.next();
+            if (tenantId != null && tenantId.equals(entry.getValue())) {
+                invalidate(entry.getKey());
+                it.remove();
+            }
+        }
+    }
+
     /**
      * 监听配置变更事件，按作用域精准失效缓存：
      * GLOBAL → 全量失效；TENANT → 该租户用户失效；USER → 按归属用户ID失效。
@@ -221,27 +241,29 @@ public class AgentRegistry {
      */
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onConfigChanged(ConfigChangedEvent event) {
-        if (ConfigService.SCOPE_PLATFORM.equals(event.getScope())) {
+        // 1. 本地失效
+        doInvalidate(event.getScope(), event.getTenantId(), event.getOwnerId());
+        // 2. 跨节点广播（Redis Pub/Sub）
+        if (redisPubSub != null) {
+            redisPubSub.publishConfigChanged(event.getScope(), event.getTenantId(), event.getOwnerId());
+        }
+    }
+
+    /** 本地缓存失效逻辑（抽取为独立方法，Pub/Sub 监听器也调用） */
+    private void doInvalidate(String scope, Long tenantId, String ownerId) {
+        if (ConfigService.SCOPE_PLATFORM.equals(scope)) {
             agents.clear();
             log.info("全局配置变更，已清空全部 Agent 缓存");
             return;
         }
-        if (ConfigService.SCOPE_TENANT.equals(event.getScope())) {
-            Long tenantId = event.getTenantId();
-            Iterator<Map.Entry<String, Long>> it = userTenants.entrySet().iterator();
-            while (it.hasNext()) {
-                Map.Entry<String, Long> entry = it.next();
-                if (tenantId != null && tenantId.equals(entry.getValue())) {
-                    invalidate(entry.getKey());
-                    it.remove();
-                }
-            }
+        if (ConfigService.SCOPE_TENANT.equals(scope)) {
+            invalidateByTenant(tenantId);
             log.info("租户 {} 配置变更，已失效该租户 Agent 缓存", tenantId);
             return;
         }
-        if (ConfigService.SCOPE_USER.equals(event.getScope())
-                && StringUtils.hasText(event.getOwnerId())) {
-            invalidate(event.getOwnerId());
+        if (ConfigService.SCOPE_USER.equals(scope)
+                && StringUtils.hasText(ownerId)) {
+            invalidate(ownerId);
         }
     }
 

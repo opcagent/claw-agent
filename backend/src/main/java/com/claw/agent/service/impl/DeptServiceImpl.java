@@ -7,13 +7,13 @@ import com.claw.agent.common.ResultCode;
 import com.claw.agent.mapper.DeptMapper;
 import com.claw.agent.mapper.UserMapper;
 import com.claw.agent.model.Dept;
-import com.claw.agent.model.User;
 import com.claw.agent.security.LoginUser;
 import com.claw.agent.service.DeptService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
 import java.util.List;
 
 /**
@@ -99,8 +99,7 @@ public class DeptServiceImpl extends ServiceImpl<DeptMapper, Dept> implements De
         if (childCount != null && childCount > 0) {
             throw new BizException(ResultCode.PARAM_ERROR, "存在子部门，禁止删除");
         }
-        Long userCount = userMapper.selectCount(new LambdaQueryWrapper<User>()
-                .eq(User::getDeptId, id));
+        Long userCount = userMapper.countUsersByDeptId(id);
         if (userCount != null && userCount > 0) {
             throw new BizException(ResultCode.PARAM_ERROR, "部门下仍有用户，禁止删除");
         }

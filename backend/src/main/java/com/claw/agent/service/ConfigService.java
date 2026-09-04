@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.claw.agent.common.BizException;
 import com.claw.agent.common.CryptoUtil;
 import com.claw.agent.common.ResultCode;
+import com.claw.agent.config.infra.RedisPubSub;
 import com.claw.agent.mapper.AgentConfigMapper;
 import com.claw.agent.mapper.ModelProviderConfigMapper;
 import com.claw.agent.model.AgentConfigItem;
@@ -163,6 +164,8 @@ public class ConfigService {
     private final Cache<String, String> configValueCache;
     /** 当前生效提供商缓存（scope:tenantId:ownerId → ModelProviderConfig） */
     private final Cache<String, ModelProviderConfig> providerConfigCache;
+    /** Redis Pub/Sub（可选） */
+    private final RedisPubSub redisPubSub;
 
     // ------------------------------------------------------------
     // 读取：三级作用域解析（USER > TENANT > GLOBAL）
@@ -434,6 +437,7 @@ public class ConfigService {
         configValueCache.invalidate(resolvedKey);
         String valueCacheKey = scope + ":" + (tenantId == null ? 0L : tenantId) + ":" + ownerId + ":" + key;
         configValueCache.invalidate(valueCacheKey);
+        if (redisPubSub != null) redisPubSub.publishCacheInvalidate("configValueCache");
     }
 
     /**
@@ -483,6 +487,7 @@ public class ConfigService {
         // 失效提供商缓存：按作用域精确失效
         String providerCacheKey = cfg.getScope() + ":" + (cfg.getTenantId() == null ? 0L : cfg.getTenantId()) + ":" + cfg.getOwnerId();
         providerConfigCache.invalidate(providerCacheKey);
+        if (redisPubSub != null) redisPubSub.publishCacheInvalidate("providerConfigCache");
     }
 
     // ------------------------------------------------------------

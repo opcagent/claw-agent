@@ -64,7 +64,15 @@ public enum ResultCode {
     PRESET_CODE_EXISTS(5002, "预设编码已存在"),
 
     /** 预设模板已禁用（对话选择时不可用） */
-    PRESET_DISABLED(5003, "预设模板不存在或已禁用");
+    PRESET_DISABLED(5003, "预设模板不存在或已禁用"),
+
+    // ===== 系统级（6xxx）=====
+
+    /** 服务正在维护（优雅停机等场景） */
+    SERVICE_UNAVAILABLE(503, "服务正在更新中，请稍后重试"),
+
+    /** 请求过于频繁（限流） */
+    RATE_LIMITED(429, "请求过于频繁，请稍后再试");
 
     /** 错误码 */
     private final int code;

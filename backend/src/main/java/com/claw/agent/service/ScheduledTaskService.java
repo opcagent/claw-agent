@@ -72,7 +72,9 @@ public interface ScheduledTaskService extends IService<ScheduledTask> {
     List<ScheduledTaskLog> listLogs(LoginUser user, Long taskId);
 
     /**
-     * 扫描并执行到期任务（由调度器每分钟调用）。
+     * 执行指定任务（由 Quartz Scheduler 按 Cron 触发）。
+     *
+     * @param taskId 任务 ID
      */
-    void scanAndExecuteDueTasks();
+    void executeScheduledTask(long taskId);
 }

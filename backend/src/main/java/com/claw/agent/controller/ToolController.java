@@ -2,8 +2,8 @@ package com.claw.agent.controller;
 
 import com.claw.agent.common.Result;
 import com.claw.agent.config.tool.ToolRegistry;
-import io.swagger.v3.oas.annotations.tags.Tag;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;

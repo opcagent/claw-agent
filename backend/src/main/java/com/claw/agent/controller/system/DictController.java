@@ -1,27 +1,15 @@
 package com.claw.agent.controller.system;
 
-import com.claw.agent.common.BizException;
-import com.claw.agent.common.OperType;
-import com.claw.agent.common.ReactiveSupport;
-import com.claw.agent.common.Result;
-import com.claw.agent.common.ResultCode;
+import com.claw.agent.common.*;
 import com.claw.agent.model.DictData;
 import com.claw.agent.model.DictType;
 import com.claw.agent.security.LoginUser;
 import com.claw.agent.service.DictService;
-import io.swagger.v3.oas.annotations.tags.Tag;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.web.bind.annotation.DeleteMapping;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.PutMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
 
 import java.util.List;

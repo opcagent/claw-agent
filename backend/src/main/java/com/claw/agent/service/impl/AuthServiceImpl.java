@@ -1,31 +1,11 @@
 package com.claw.agent.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.claw.agent.common.BizException;
-import com.claw.agent.common.IpContextHolder;
-import com.claw.agent.common.ReactiveSupport;
-import com.claw.agent.common.ResultCode;
-import com.claw.agent.common.RoleConstants;
+import com.claw.agent.common.*;
 import com.claw.agent.config.infra.TraceFilter;
-import com.claw.agent.mapper.LoginLogMapper;
-import com.claw.agent.mapper.MenuMapper;
-import com.claw.agent.mapper.RoleMapper;
-import com.claw.agent.mapper.TenantMapper;
-import com.claw.agent.mapper.UserMapper;
-import com.claw.agent.mapper.UserTenantMapper;
-import com.claw.agent.model.LoginLog;
-import com.claw.agent.model.Menu;
-import com.claw.agent.model.Role;
-import com.claw.agent.model.Tenant;
-import com.claw.agent.model.User;
-import com.claw.agent.model.UserTenant;
-import com.claw.agent.model.dto.ChangePasswordRequest;
-import com.claw.agent.model.dto.LoginRequest;
-import com.claw.agent.model.dto.LoginResponse;
-import com.claw.agent.model.dto.ProfileResponse;
-import com.claw.agent.model.dto.ProfileUpdateRequest;
-import com.claw.agent.model.dto.SwitchTenantRequest;
-import com.claw.agent.model.dto.TenantBrief;
+import com.claw.agent.mapper.*;
+import com.claw.agent.model.*;
+import com.claw.agent.model.dto.*;
 import com.claw.agent.security.JwtUtil;
 import com.claw.agent.security.LoginRateLimiter;
 import com.claw.agent.security.LoginUser;
@@ -85,7 +65,7 @@ public class AuthServiceImpl implements AuthService {
             throw new BizException(ResultCode.LOGIN_FAILED);
         }
         if (!user.isEnabled()) {
-            recordLoginLog(user.getUsername(), user.getTenantId(), LoginLog.TYPE_LOGIN, 0, "账号已禁用");
+            recordLoginLog(user.getUsername(), null, LoginLog.TYPE_LOGIN, 0, "账号已禁用");
             throw new BizException(ResultCode.USER_DISABLED);
         }
 
@@ -119,9 +99,12 @@ public class AuthServiceImpl implements AuthService {
                     .orElse(tenantGroups.keySet().iterator().next());
             log.info("用户属于多个组织，自动选择默认组织: user={}, tenant={}", user.getUsername(), activeTenantId);
         } else {
-            // 单组织或无 user_tenant 记录：兼容存量数据
-            activeTenantId = tenantGroups.size() == 1
-                    ? tenantGroups.keySet().iterator().next() : user.getTenantId();
+            // 单组织：直接选唯一组织；无记录说明用户未分配任何组织，拒绝登录
+            if (tenantGroups.isEmpty()) {
+                recordLoginLog(user.getUsername(), null, LoginLog.TYPE_LOGIN, 0, "用户未分配任何组织");
+                throw new BizException(ResultCode.FORBIDDEN, "您尚未被分配到任何组织，请联系管理员");
+            }
+            activeTenantId = tenantGroups.keySet().iterator().next();
         }
         LoginResponse response = buildLoginResponse(user, activeTenantId);
         // 登录成功清零失败计数（同维度历史失败不再影响后续登录）
@@ -187,17 +170,11 @@ public class AuthServiceImpl implements AuthService {
             throw new BizException(ResultCode.FORBIDDEN, "您不属于该组织或已被禁用");
         }
 
-        // 2. 更新 sys_user.tenant_id 为当前活跃组织
+        // 2. 重新签发 JWT（tenant_id 已迁移到 sys_user_tenant，无需更新 sys_user）
         User user = userMapper.selectById(current.getUserId());
         if (user == null) {
             throw new BizException(ResultCode.NOT_FOUND, "用户不存在");
         }
-        if (!request.getTenantId().equals(user.getTenantId())) {
-            user.setTenantId(request.getTenantId());
-            userMapper.updateById(user);
-        }
-
-        // 3. 重新签发 JWT
         LoginResponse response = buildLoginResponse(user, request.getTenantId());
         log.info("用户切换组织: user={}, from={}, to={}",
                 current.getUsername(), current.getTenantId(), request.getTenantId());

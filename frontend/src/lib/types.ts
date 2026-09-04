@@ -55,6 +55,10 @@ export const ERROR_CODES = {
   PRESET_CODE_EXISTS: 5002,
   /** 预设模板不存在或已禁用 */
   PRESET_DISABLED: 5003,
+  /** 服务正在更新中（优雅停机） */
+  SERVICE_UNAVAILABLE: 503,
+  /** 请求过于频繁（限流） */
+  RATE_LIMITED: 429,
 } as const;
 
 /** 登录响应（对应 dto/LoginResponse.java） */

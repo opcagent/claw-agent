@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  用户表自定义 SQL 映射。
+  sys_user 已移除 tenant_id / dept_id，组织归属统一走 sys_user_tenant 关联。
+  BaseMapper 内置 CRUD 由 MyBatis Plus 自动生成，此处仅放联表等自定义查询。
+-->
+<mapper namespace="com.claw.agent.mapper.UserMapper">
+
+    <!-- 用户结果映射（sys_user 全字段，不含已删除的 tenant_id / dept_id） -->
+    <resultMap id="userResultMap" type="com.claw.agent.model.User">
+        <id column="id" property="id"/>
+        <result column="username" property="username"/>
+        <result column="password" property="password"/>
+        <result column="nickname" property="nickname"/>
+        <result column="phone" property="phone"/>
+        <result column="email" property="email"/>
+        <result column="gender" property="gender"/>
+        <result column="status" property="status"/>
+        <result column="remark" property="remark"/>
+        <result column="create_time" property="createTime"/>
+        <result column="update_time" property="updateTime"/>
+    </resultMap>
+
+    <!-- 按组织查询用户列表（经 sys_user_tenant 关联） -->
+    <select id="selectUsersByTenantId" resultMap="userResultMap">
+        SELECT DISTINCT u.id, u.username, u.password, u.nickname, u.phone,
+               u.email, u.gender, u.status, u.remark, u.create_time, u.update_time
+        FROM sys_user u
+                 INNER JOIN sys_user_tenant ut ON ut.user_id = u.id
+        WHERE ut.tenant_id = #{tenantId}
+          AND ut.status = 1
+        ORDER BY u.id ASC
+        LIMIT #{limit}
+    </select>
+
+    <!-- 按组织分页查询用户（支持关键词模糊 + 状态筛选） -->
+    <select id="pageUsersByTenantId" resultMap="userResultMap">
+        SELECT DISTINCT u.id, u.username, u.password, u.nickname, u.phone,
+               u.email, u.gender, u.status, u.remark, u.create_time, u.update_time
+        FROM sys_user u
+                 INNER JOIN sys_user_tenant ut ON ut.user_id = u.id
+        WHERE ut.tenant_id = #{tenantId}
+          AND ut.status = 1
+        <if test="keyword != null and keyword != ''">
+            AND (u.username LIKE CONCAT('%', #{keyword}, '%')
+                 OR u.nickname LIKE CONCAT('%', #{keyword}, '%')
+                 OR u.phone LIKE CONCAT('%', #{keyword}, '%')
+                 OR u.email LIKE CONCAT('%', #{keyword}, '%'))
+        </if>
+        <if test="status != null">
+            AND u.status = #{status}
+        </if>
+        ORDER BY u.id ASC
+    </select>
+
+    <!-- 按组织+部门分页查询用户（支持关键词模糊 + 状态筛选） -->
+    <select id="pageUsersByTenantIdAndDeptId" resultMap="userResultMap">
+        SELECT DISTINCT u.id, u.username, u.password, u.nickname, u.phone,
+               u.email, u.gender, u.status, u.remark, u.create_time, u.update_time
+        FROM sys_user u
+                 INNER JOIN sys_user_tenant ut ON ut.user_id = u.id
+        WHERE ut.tenant_id = #{tenantId}
+          AND ut.dept_id = #{deptId}
+          AND ut.status = 1
+        <if test="keyword != null and keyword != ''">
+            AND (u.username LIKE CONCAT('%', #{keyword}, '%')
+                 OR u.nickname LIKE CONCAT('%', #{keyword}, '%')
+                 OR u.phone LIKE CONCAT('%', #{keyword}, '%')
+                 OR u.email LIKE CONCAT('%', #{keyword}, '%'))
+        </if>
+        <if test="status != null">
+            AND u.status = #{status}
+        </if>
+        ORDER BY u.id ASC
+    </select>
+
+    <!-- 按部门统计用户数（删除部门前校验） -->
+    <select id="countUsersByDeptId" resultType="java.lang.Long">
+        SELECT COUNT(DISTINCT u.id)
+        FROM sys_user u
+                 INNER JOIN sys_user_tenant ut ON ut.user_id = u.id
+        WHERE ut.dept_id = #{deptId}
+          AND ut.status = 1
+    </select>
+
+    <!-- 查组织内最大序号用户（生成规则ID用，按 ID 倒序取第一条） -->
+    <select id="selectLastUserByTenantId" resultMap="userResultMap">
+        SELECT DISTINCT u.id, u.username, u.password, u.nickname, u.phone,
+               u.email, u.gender, u.status, u.remark, u.create_time, u.update_time
+        FROM sys_user u
+                 INNER JOIN sys_user_tenant ut ON ut.user_id = u.id
+        WHERE ut.tenant_id = #{tenantId}
+        ORDER BY u.id DESC
+        LIMIT 1
+    </select>
+
+</mapper>

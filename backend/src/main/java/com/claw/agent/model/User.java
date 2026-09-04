@@ -21,12 +21,6 @@ public class User extends BaseEntity {
     @TableId(type = IdType.INPUT)
     private String id;
 
-    /** 所属租户ID（关联 sys_tenant.id，多租户隔离的组织维度） */
-    private Long tenantId;
-
-    /** 所属部门ID（关联 sys_dept.id） */
-    private Long deptId;
-
     /** 登录用户名（唯一），同时作为 Agent 的 userId */
     private String username;
 
