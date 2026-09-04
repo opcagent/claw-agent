@@ -10,7 +10,7 @@
  * 4. 管理员视图: 租户用户排行
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, Fragment } from "react";
 import AppShell from "@/components/app-shell";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
@@ -22,7 +22,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
-import { Loader2, TrendingUp, MessageSquare, Calendar, Clock, Database, Users, Gauge } from "lucide-react";
+import { Loader2, TrendingUp, MessageSquare, Calendar, Clock, Database, Users, Gauge, ChevronRight, ChevronDown } from "lucide-react";
 import type { TokenUsageLog, TokenUsageSummary } from "@/lib/types";
 
 export default function TokenUsagePage() {
@@ -36,6 +36,8 @@ export default function TokenUsagePage() {
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
   /** 月度配额上限（万 tokens，0=不限制） */
   const [quotaWan, setQuotaWan] = useState(0);
+  /** 按回合聚合展示时展开的 turnId 集合 */
+  const [expandedTurns, setExpandedTurns] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     loadTokenUsageData();
@@ -132,6 +134,42 @@ export default function TokenUsagePage() {
   }));
 
   const COLORS = ["#0088FE", "#00C49F", "#FFBB28", "#FF8042", "#8884D8"];
+
+  /**
+   * 将流水记录按 turnId 分组聚合。
+   * 有 turnId 的记录归入同一回合，无 turnId 的历史数据各自独立成组。
+   */
+  const turnGroups = (() => {
+    const groups: { turnId: string | null; logs: TokenUsageLog[]; totalTokens: number; totalPrompt: number; totalCompletion: number; firstTime: string }[] = [];
+    const map = new Map<string, typeof groups[number]>();
+    for (const log of logs) {
+      if (log.turnId) {
+        let g = map.get(log.turnId);
+        if (!g) {
+          g = { turnId: log.turnId, logs: [], totalTokens: 0, totalPrompt: 0, totalCompletion: 0, firstTime: log.usageTime };
+          map.set(log.turnId, g);
+          groups.push(g);
+        }
+        g.logs.push(log);
+        g.totalTokens += log.totalTokens || 0;
+        g.totalPrompt += log.promptTokens || 0;
+        g.totalCompletion += log.completionTokens || 0;
+      } else {
+        // 无 turnId 的历史数据独立成组
+        const g = { turnId: null, logs: [log], totalTokens: log.totalTokens || 0, totalPrompt: log.promptTokens || 0, totalCompletion: log.completionTokens || 0, firstTime: log.usageTime };
+        groups.push(g);
+      }
+    }
+    return groups;
+  })();
+
+  const toggleTurn = (turnId: string) => {
+    setExpandedTurns(prev => {
+      const next = new Set(prev);
+      if (next.has(turnId)) next.delete(turnId); else next.add(turnId);
+      return next;
+    });
+  };
 
   if (loading) {
     return (
@@ -328,13 +366,14 @@ export default function TokenUsagePage() {
           <Card>
             <CardHeader>
               <CardTitle>最近 50 条使用记录</CardTitle>
-              <CardDescription>详细的模型调用流水</CardDescription>
+              <CardDescription>按回合聚合展示，同一次用户消息触发的模型调用归为一个回合</CardDescription>
             </CardHeader>
             <CardContent>
               <ScrollArea className="h-[500px]">
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead className="w-[30px]"></TableHead>
                       <TableHead>时间</TableHead>
                       <TableHead>调用人</TableHead>
                       <TableHead>会话 ID</TableHead>
@@ -347,41 +386,76 @@ export default function TokenUsagePage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {logs.length > 0 ? (
-                      logs.map((log) => (
-                        <TableRow key={log.id}>
-                          <TableCell className="font-mono text-xs">
-                            {formatTime(log.usageTime)}
-                          </TableCell>
-                          <TableCell className="text-sm">{log.username || "-"}</TableCell>
-                          <TableCell className="font-mono text-xs truncate max-w-[100px]">
-                            {log.sessionId || "-"}
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant="outline">{log.provider?.toUpperCase()}</Badge>
-                          </TableCell>
-                          <TableCell className="text-sm">{log.modelName || "-"}</TableCell>
-                          <TableCell className="text-right font-mono">
-                            {formatNumber(log.promptTokens || 0)}
-                          </TableCell>
-                          <TableCell className="text-right font-mono">
-                            {formatNumber(log.completionTokens || 0)}
-                          </TableCell>
-                          <TableCell className="text-right font-mono font-semibold">
-                            {formatNumber(log.totalTokens || 0)}
-                          </TableCell>
-                          <TableCell>
-                            {log.toolName ? (
-                              <Badge variant="secondary">{log.toolName}</Badge>
-                            ) : (
-                              "-"
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      ))
+                    {turnGroups.length > 0 ? (
+                      turnGroups.map((group, gi) => {
+                        const isMulti = group.logs.length > 1;
+                        const isExpanded = group.turnId ? expandedTurns.has(group.turnId) : false;
+                        const firstLog = group.logs[0];
+                        const turnKey = group.turnId ?? `solo-${gi}`;
+                        return (
+                          <Fragment key={turnKey}>
+                            {/* 回合汇总行 */}
+                            <TableRow className={isMulti ? "bg-slate-50/60 font-medium" : ""}>
+                              <TableCell>
+                                {isMulti && group.turnId && (
+                                  <button onClick={() => toggleTurn(group.turnId!)} className="p-0.5 rounded hover:bg-slate-200 transition-colors">
+                                    {isExpanded ? <ChevronDown className="h-3.5 w-3.5 text-slate-500" /> : <ChevronRight className="h-3.5 w-3.5 text-slate-500" />}
+                                  </button>
+                                )}
+                              </TableCell>
+                              <TableCell className="font-mono text-xs">{formatTime(group.firstTime)}</TableCell>
+                              <TableCell className="text-sm">{firstLog.username || "-"}</TableCell>
+                              <TableCell className="font-mono text-xs truncate max-w-[100px]">{firstLog.sessionId || "-"}</TableCell>
+                              <TableCell>
+                                {isMulti ? (
+                                  <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
+                                    {firstLog.provider?.toUpperCase()} ×{group.logs.length}
+                                  </Badge>
+                                ) : (
+                                  <Badge variant="outline">{firstLog.provider?.toUpperCase()}</Badge>
+                                )}
+                              </TableCell>
+                              <TableCell className="text-sm">
+                                {isMulti ? (
+                                  <span className="text-xs text-muted-foreground">{group.logs.map(l => l.modelName).filter((v, i, a) => a.indexOf(v) === i).join(", ")}</span>
+                                ) : (
+                                  firstLog.modelName || "-"
+                                )}
+                              </TableCell>
+                              <TableCell className="text-right font-mono">{formatNumber(group.totalPrompt)}</TableCell>
+                              <TableCell className="text-right font-mono">{formatNumber(group.totalCompletion)}</TableCell>
+                              <TableCell className="text-right font-mono font-semibold">{formatNumber(group.totalTokens)}</TableCell>
+                              <TableCell>
+                                {isMulti ? (
+                                  <Badge variant="secondary">{group.logs.filter(l => l.toolName).length} 次工具调用</Badge>
+                                ) : firstLog.toolName ? (
+                                  <Badge variant="secondary">{firstLog.toolName}</Badge>
+                                ) : (
+                                  "-"
+                                )}
+                              </TableCell>
+                            </TableRow>
+                            {/* 展开的明细行 */}
+                            {isExpanded && group.logs.map((log) => (
+                              <TableRow key={log.id} className="bg-white">
+                                <TableCell></TableCell>
+                                <TableCell className="font-mono text-xs text-muted-foreground">{formatTime(log.usageTime)}</TableCell>
+                                <TableCell className="text-sm text-muted-foreground">{log.username || "-"}</TableCell>
+                                <TableCell className="font-mono text-xs text-muted-foreground truncate max-w-[100px]">{log.sessionId || "-"}</TableCell>
+                                <TableCell><Badge variant="outline" className="text-xs">{log.provider?.toUpperCase()}</Badge></TableCell>
+                                <TableCell className="text-sm text-muted-foreground">{log.modelName || "-"}</TableCell>
+                                <TableCell className="text-right font-mono text-xs">{formatNumber(log.promptTokens || 0)}</TableCell>
+                                <TableCell className="text-right font-mono text-xs">{formatNumber(log.completionTokens || 0)}</TableCell>
+                                <TableCell className="text-right font-mono text-xs font-medium">{formatNumber(log.totalTokens || 0)}</TableCell>
+                                <TableCell>{log.toolName ? <Badge variant="secondary" className="text-xs">{log.toolName}</Badge> : "-"}</TableCell>
+                              </TableRow>
+                            ))}
+                          </Fragment>
+                        );
+                      })
                     ) : (
                       <TableRow>
-                        <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
+                        <TableCell colSpan={10} className="text-center text-muted-foreground py-8">
                           暂无使用记录
                         </TableCell>
                       </TableRow>

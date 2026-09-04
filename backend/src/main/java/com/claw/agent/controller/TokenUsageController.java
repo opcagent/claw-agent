@@ -120,7 +120,8 @@ public class TokenUsageController {
                     100,   // prompt tokens
                     50,    // completion tokens
                     "test-request-" + System.currentTimeMillis(),
-                    null   // tool name
+                    null,  // tool name
+                    null   // turn id
             );
             return "已记录测试 Token 使用: 150 tokens";
         });

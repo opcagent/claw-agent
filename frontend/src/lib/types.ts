@@ -553,6 +553,8 @@ export interface TokenUsageLog {
   totalTokens: number;
   requestId?: string;
   toolName?: string;
+  /** 回合ID：同一次用户消息触发的所有模型调用共享此ID */
+  turnId?: string;
   usageTime: string;
   usageDate?: string;
 }

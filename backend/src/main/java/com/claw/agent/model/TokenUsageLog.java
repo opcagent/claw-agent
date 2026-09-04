@@ -66,6 +66,10 @@ public class TokenUsageLog {
     @Schema(description = "工具名称")
     private String toolName;
 
+    /** 回合ID：同一次用户消息触发的所有模型调用共享此ID */
+    @Schema(description = "回合ID")
+    private String turnId;
+
     /** 使用时间 */
     @Schema(description = "使用时间")
     private LocalDateTime usageTime;

@@ -54,10 +54,11 @@ public class TokenUsageService {
      * @param completionTokens 回复 Token 数
      * @param requestId       请求ID
      * @param toolName        工具名称(可选)
+     * @param turnId          回合ID(可选，同一次用户消息触发的所有模型调用共享此ID)
      */
     public void recordUsage(String userId, Long tenantId, String username, String sessionId,
                            String provider, String modelName, int promptTokens, int completionTokens,
-                           String requestId, String toolName) {
+                           String requestId, String toolName, String turnId) {
         LocalDateTime now = LocalDateTime.now();
         
         // Step 1: 插入流水记录
@@ -73,6 +74,7 @@ public class TokenUsageService {
         usageLog.setTotalTokens(promptTokens + completionTokens);
         usageLog.setRequestId(requestId);
         usageLog.setToolName(toolName);
+        usageLog.setTurnId(turnId);
         usageLog.setUsageTime(now);
 
         try {

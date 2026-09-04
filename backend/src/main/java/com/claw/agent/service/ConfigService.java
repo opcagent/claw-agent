@@ -422,6 +422,7 @@ public class ConfigService {
         if (isSensitiveKey(key) && StringUtils.hasText(value) && !value.startsWith("enc:")) {
             storedValue = cryptoUtil.encrypt(value);
         }
+        // 查询条件与唯一键 uk_scope_key(scope, tenant_id, owner_id, config_key) 对齐
         AgentConfigItem existed = agentConfigMapper.selectOne(
                 new LambdaQueryWrapper<AgentConfigItem>()
                         .eq(AgentConfigItem::getScope, scope)

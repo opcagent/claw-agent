@@ -196,6 +196,8 @@ public class AgentService {
             StringBuilder replyBuffer = new StringBuilder();
             // 工具调用追踪：记录本轮对话中调用的所有工具名称（用于 Token 日志）
             List<String> toolNames = new ArrayList<>();
+            // 回合ID：同一次用户消息触发的所有模型调用共享此ID，前端可按 turn 聚合展示 Token 消耗
+            String turnId = UUID.randomUUID().toString();
             // 流水线进度追踪：pipeline != null 时启用，每次 ModelCallEndEvent 计数 +1
             // 进度 = min(当前轮次, 总步数) / 总步数，前端展示进度条
             final int pipelineTotalSteps = pipeline != null
@@ -215,20 +217,18 @@ public class AgentService {
             // 相比 concatMap+delaySubscription 模式，不创建内部 Flux 队列，
             // 长流水线（25 轮迭代）无定时器堆积。主事件流终止时 takeUntilOther 同步停止心跳。
             Flux<ChatEvent> eventStream = agent.streamEvents(List.of(msg), rc)
-                    .doOnNext(event -> {
-                        accumulateAndFlush(user, effectiveSessionId,
-                                toChatEvent(user, effectiveSessionId, event, providerName, modelName, toolNames,
-                                        pipeline, pipelineTotalSteps, pipelineModelCallCount),
-                                replyBuffer);
-                        if (event instanceof ToolCallStartEvent toolStart) {
-                            String toolName = toolStart.getToolCallName();
-                            if (toolName != null && !toolNames.contains(toolName)) {
+                    .map(event -> toChatEvent(user, effectiveSessionId, event, providerName, modelName, toolNames,
+                            pipeline, pipelineTotalSteps, pipelineModelCallCount, turnId))
+                    .doOnNext(chatEvent -> {
+                        accumulateAndFlush(user, effectiveSessionId, chatEvent, replyBuffer);
+                        // 跟踪工具调用：从原始 AgentEvent 提取工具名
+                        if ("tool_start".equals(chatEvent.getType()) && chatEvent.getToolName() != null) {
+                            String toolName = chatEvent.getToolName();
+                            if (!toolNames.contains(toolName)) {
                                 toolNames.add(toolName);
                             }
                         }
                     })
-                    .map(event -> toChatEvent(user, effectiveSessionId, event, providerName, modelName, toolNames,
-                            pipeline, pipelineTotalSteps, pipelineModelCallCount))
                     .share();  // 热流：merge 与 takeUntilOther 共享同一订阅，避免 streamEvents 被重复执行
             Flux<ChatEvent> heartbeat = Flux.interval(Duration.ofSeconds(15))
                     .map(t -> ChatEvent.builder().type("keepalive")
@@ -325,10 +325,12 @@ public class AgentService {
         StringBuilder replyBuffer = new StringBuilder();
         // HITL 恢复执行也跟踪工具调用（HITL 无流水线上下文，进度追踪参数传空值）
         List<String> toolNames = new ArrayList<>();
+        // HITL 恢复也是用户触发的新一轮模型调用，分配独立 turnId
+        String turnId = UUID.randomUUID().toString();
         return agent.streamEvents(List.of(resumeMsg), rc)
                 .map(event -> {
                     ChatEvent chatEvent = toChatEvent(user, sessionId, event, providerName, modelName, toolNames,
-                            null, 0, new AtomicInteger(0));
+                            null, 0, new AtomicInteger(0), turnId);
                     accumulateAndFlush(user, sessionId, chatEvent, replyBuffer);
                     // 跟踪工具调用
                     if (event instanceof ToolCallStartEvent toolStart) {
@@ -892,7 +894,7 @@ public class AgentService {
     private ChatEvent toChatEvent(LoginUser user, String sessionId, AgentEvent event,
                                   String providerName, String modelName, List<String> toolNames,
                                   AgentPipeline pipeline, int pipelineTotalSteps,
-                                  AtomicInteger pipelineModelCallCount) {
+                                  AtomicInteger pipelineModelCallCount, String turnId) {
         ChatEvent.ChatEventBuilder builder = ChatEvent.builder().sessionId(sessionId);
         if (event instanceof AgentStartEvent start) {
             return builder.type("start").replyId(start.getReplyId()).build();
@@ -916,7 +918,7 @@ public class AgentService {
         } else if (event instanceof ModelCallEndEvent modelEnd) {
             // Token 自动追踪：使用回合级缓存的 provider/modelName，避免重复查库
             // 工具名称从外层 toolNames 列表传入（已在 map 中跟踪）
-            recordTokenUsage(user, sessionId, modelEnd, providerName, modelName, toolNames);
+            recordTokenUsage(user, sessionId, modelEnd, providerName, modelName, toolNames, turnId);
             // 流水线进度事件：每次模型调用完成计数 +1，前端展示进度条
             // step = min(当前轮次, 总步数)：Agent 可能在最后几轮做综合总结，进度不应超过 100%
             if (pipeline != null && pipelineTotalSteps > 0) {
@@ -977,7 +979,8 @@ public class AgentService {
      * DB 写入在 boundedElastic 线程池异步执行，不阻塞 SSE 事件流；失败仅告警不抛出。
      */
     private void recordTokenUsage(LoginUser user, String sessionId, ModelCallEndEvent event,
-                                  String providerName, String modelName, List<String> toolNames) {
+                                  String providerName, String modelName, List<String> toolNames,
+                                  String turnId) {
         ChatUsage usage = event.getUsage();
         if (usage == null || usage.getTotalTokens() <= 0) {
             return;
@@ -997,7 +1000,8 @@ public class AgentService {
                         usage.getInputTokens(),
                         usage.getOutputTokens(),
                         event.getReplyId(),
-                        toolNameStr
+                        toolNameStr,
+                        turnId
                 );
                 log.debug("Token 已记录: user={}, input={}, output={}, total={}, tools={}",
                         user.getUsername(), usage.getInputTokens(), usage.getOutputTokens(), usage.getTotalTokens(), toolNameStr);
