@@ -10,7 +10,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
-import { AlertTriangle, Archive, ArchiveRestore, Bot, Brain, Check, ChevronDown, ChevronUp, Clipboard, Copy, Download, FileText, LayoutGrid, Loader2, Paperclip, Pencil, Plus, Send, Slash, Square, Table, Trash2, User, Wrench, X, ZoomIn } from "lucide-react";
+import { AlertTriangle, Archive, ArchiveRestore, Bot, Brain, Check, ChevronDown, ChevronUp, Clipboard, Copy, Download, FileText, LayoutGrid, Loader2, Paperclip, Pencil, Plus, RefreshCw, RotateCcw, Search, Send, Slash, Square, Table, Trash2, User, Wrench, X, ZoomIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -300,6 +300,12 @@ export default function ChatView() {
   const [phrasePanelOpen, setPhrasePanelOpen] = useState(false);
   /** 是否查看已归档会话 */
   const [showArchived, setShowArchived] = useState(false);
+  /** 会话搜索关键词 */
+  const [sessionSearch, setSessionSearch] = useState("");
+  /** 搜索结果（非空时替换侧栏会话列表） */
+  const [searchResults, setSearchResults] = useState<ChatSession[] | null>(null);
+  /** 搜索加载中标记 */
+  const [searching, setSearching] = useState(false);
   /** 快捷指令触发按钮位置（用于 Portal 定位，避免被父容器 overflow-hidden 裁剪） */
   const phraseBtnRef = useRef<HTMLButtonElement>(null);
   const phrasePanelRef = useRef<HTMLDivElement>(null);
@@ -442,6 +448,28 @@ export default function ChatView() {
       toast.error(e instanceof Error ? e.message : "加载会话失败");
     }
   }, [showArchived]);
+
+  /** 搜索会话（防抖 300ms） */
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const doSearchSessions = useCallback(async (keyword: string) => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    if (!keyword.trim()) {
+      setSearchResults(null);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    searchTimerRef.current = setTimeout(async () => {
+      try {
+        const res = await api.get<ChatSession[]>(`/api/chat/sessions/search?keyword=${encodeURIComponent(keyword.trim())}`);
+        setSearchResults(res.data || []);
+      } catch {
+        setSearchResults([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 300);
+  }, []);
 
   useEffect(() => {
     loadSessions();
@@ -808,6 +836,67 @@ export default function ChatView() {
     }
   }
 
+  /** 重新生成：删除最后一轮助手回复，重新发送最后一条用户消息 */
+  async function regenerateLastReply() {
+    const sid = sessionIdRef.current;
+    if (!sid || sending) return;
+    // 中止旧流（如果有）
+    if (streamAbortRef.current) {
+      userCancelledRef.current = true;
+      abortCurrentStream();
+      if (activeStreamIdRef.current) {
+        const oldId = activeStreamIdRef.current;
+        setBlocks((prev) => prev.filter((b) => b.id !== oldId));
+      }
+    }
+    // 移除最后一个助手气泡（即将被重新生成）
+    const lastAssistantIdx = [...blocks].map((b, i) => b.kind === "assistant" ? i : -1).filter(i => i >= 0).pop();
+    if (lastAssistantIdx !== undefined) {
+      const removedId = blocks[lastAssistantIdx].id;
+      setBlocks((prev) => prev.filter((b) => b.id !== removedId));
+    }
+    const assistantId = nextId();
+    appendBlock({ id: assistantId, kind: "assistant", text: "", thinking: true, thinkingText: "", thinkingExpanded: false, createTime: new Date().toISOString() });
+    activeStreamIdRef.current = assistantId;
+    setSending(true);
+    const ctrl = new AbortController();
+    streamAbortRef.current = ctrl;
+    const timeout = setTimeout(() => ctrl.abort(), 600_000);
+    try {
+      await api.stream(
+        `/api/chat/regenerate?sessionId=${encodeURIComponent(sid)}`,
+        {},
+        (event) => handleEvent(event, assistantId),
+        ctrl.signal
+      );
+    } catch (e) {
+      if (cancelledIdsRef.current.has(assistantId)) {
+        // no-op
+      } else if (e instanceof DOMException && e.name === "AbortError") {
+        // 切换会话导致
+      } else {
+        const message = e instanceof Error ? e.message : "重新生成失败";
+        updateAssistant(assistantId, (b) => {
+          b.thinking = false;
+          b.error = true;
+          b.text = message;
+        });
+      }
+    } finally {
+      clearTimeout(timeout);
+      streamAbortRef.current = null;
+      if (cancelledIdsRef.current.has(assistantId)) {
+        cancelledIdsRef.current.delete(assistantId);
+        userCancelledRef.current = false;
+      } else if (activeStreamIdRef.current === assistantId) {
+        updateAssistant(assistantId, (b) => { b.thinking = false; });
+        activeStreamIdRef.current = null;
+      }
+      setSending(false);
+      setTimeout(loadSessions, 0);
+    }
+  }
+
   /* ---------------- 会话操作 ---------------- */
 
   function newSession() {
@@ -985,6 +1074,22 @@ export default function ChatView() {
             <Plus className="h-4 w-4" /> 新会话
           </Button>
         </div>
+        {/* 会话搜索框 */}
+        {!showArchived && (
+          <div className="relative px-3 pb-2">
+            <Search className="absolute left-5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
+            <input
+              className="w-full rounded-md border bg-background py-1.5 pl-8 pr-3 text-xs outline-none focus:border-indigo-400 transition-colors"
+              placeholder="搜索会话内容…"
+              value={sessionSearch}
+              onChange={(e) => {
+                setSessionSearch(e.target.value);
+                doSearchSessions(e.target.value);
+              }}
+            />
+            {searching && <Loader2 className="absolute right-5 top-1/2 h-3 w-3 -translate-y-1/2 animate-spin text-muted-foreground/60" />}
+          </div>
+        )}
         {/* 会话/归档 Tab 切换 */}
         <div className="flex items-center gap-1 px-3 pb-2">
           <button
@@ -1006,7 +1111,7 @@ export default function ChatView() {
         </div>
         <ScrollArea className="flex-1 min-h-0">
           <div className="space-y-1 px-3 pb-3">
-            {sessions.map((s) => (
+            {(searchResults !== null ? searchResults : sessions).map((s) => (
               <div
                 key={s.sessionId}
                 className={
@@ -1084,9 +1189,11 @@ export default function ChatView() {
                 )}
               </div>
             ))}
-            {sessions.length === 0 && (
+            {(searchResults !== null ? searchResults : sessions).length === 0 && (
               <p className="px-2 py-4 text-center text-xs text-muted-foreground">
-                {showArchived ? "暂无归档会话" : "暂无会话，发起对话自动创建"}
+                {searchResults !== null
+                  ? (searchResults.length === 0 ? "未找到匹配的会话" : "")
+                  : (showArchived ? "暂无归档会话" : "暂无会话，发起对话自动创建")}
               </p>
             )}
           </div>
@@ -1236,7 +1343,7 @@ export default function ChatView() {
 
         <ScrollArea className="flex-1 min-h-0">
           <div className="mx-auto max-w-5xl space-y-4 p-4">
-            {blocks.map((block) => (
+            {blocks.map((block, blockIdx) => (
               <BlockView 
                 key={block.id} 
                 block={block} 
@@ -1245,6 +1352,9 @@ export default function ChatView() {
                 formatTime={formatTime}
                 onPreviewImage={setPreviewImage}
                 onPreviewTable={setTablePreviewContent}
+                isLastAssistant={block.kind === "assistant" && !blocks.slice(blockIdx + 1).some(b => b.kind === "assistant")}
+                onRegenerate={regenerateLastReply}
+                canRegenerate={!sending && !!currentSessionId}
               />
             ))}
             <div ref={bottomRef} />
@@ -1508,6 +1618,9 @@ const BlockView = React.memo(function BlockView({
   formatTime,
   onPreviewImage,
   onPreviewTable,
+  isLastAssistant,
+  onRegenerate,
+  canRegenerate,
 }: {
   block: Block;
   onConfirm: (b: Extract<Block, { kind: "hitl" }>, approved: boolean) => void;
@@ -1515,6 +1628,10 @@ const BlockView = React.memo(function BlockView({
   formatTime: (isoString?: string) => string;
   onPreviewImage?: (url: string) => void;
   onPreviewTable?: (content: string) => void;
+  /** 是否为最后一个助手气泡（显示重新生成按钮） */
+  isLastAssistant?: boolean;
+  onRegenerate?: () => void;
+  canRegenerate?: boolean;
 }) {
   if (block.kind === "user") {
     return (
@@ -1700,6 +1817,16 @@ const BlockView = React.memo(function BlockView({
               >
                 <Copy className="h-3.5 w-3.5 text-muted-foreground" />
               </button>
+              {/* 重新生成按钮：仅最后一个助手气泡显示 */}
+              {isLastAssistant && canRegenerate && !block.thinking && (
+                <button
+                  onClick={onRegenerate}
+                  className="absolute right-8 top-2 z-10 rounded p-1 opacity-0 transition-opacity hover:bg-slate-100 group-hover:opacity-100"
+                  title="重新生成"
+                >
+                  <RefreshCw className="h-3.5 w-3.5 text-muted-foreground" />
+                </button>
+              )}
 
               {/* 表格工具栏（浮动小条） */}
               {!block.thinking && hasMarkdownTable(block.text || "") && (
