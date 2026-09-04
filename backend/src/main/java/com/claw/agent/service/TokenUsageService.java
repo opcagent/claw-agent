@@ -277,17 +277,21 @@ public class TokenUsageService {
             return null; // 平台管理员：不限制
         }
         if (user.isTenantAdmin()) {
-            // 租户管理员：查本租户所有用户
-            LambdaQueryWrapper<TokenUsageSummary> wrapper = new LambdaQueryWrapper<>();
-            wrapper.eq(TokenUsageSummary::getTenantId, user.getTenantId())
-                   .eq(TokenUsageSummary::getPeriodType, "monthly")
-                   .select(TokenUsageSummary::getUserId)
-                   .groupBy(TokenUsageSummary::getUserId);
-            List<TokenUsageSummary> summaries = summaryMapper.selectList(wrapper);
-            return summaries.stream()
-                    .map(TokenUsageSummary::getUserId)
+            // 租户管理员：查本租户所有用户（从 sys_user_tenant 获取，而非 token_usage_summary）
+            List<UserTenant> userTenants = userTenantMapper.selectList(
+                    new LambdaQueryWrapper<UserTenant>()
+                            .eq(UserTenant::getTenantId, user.getTenantId())
+                            .eq(UserTenant::getStatus, 1)
+                            .select(UserTenant::getUserId));
+            List<String> userIds = userTenants.stream()
+                    .map(UserTenant::getUserId)
                     .distinct()
                     .collect(Collectors.toList());
+            // 兜底：至少包含自己
+            if (userIds.isEmpty() || !userIds.contains(user.getUserId())) {
+                userIds.add(user.getUserId());
+            }
+            return userIds;
         }
         // 普通用户：查本部门及子部门下的用户
         return getDeptAndSubDeptUserIds(user);
@@ -331,10 +335,16 @@ public class TokenUsageService {
                 .in(UserTenant::getDeptId, deptIds)
                 .select(UserTenant::getUserId));
 
-        return userTenants.stream()
+        List<String> result = userTenants.stream()
                 .map(UserTenant::getUserId)
                 .distinct()
                 .collect(Collectors.toList());
+
+        // 兜底：部门下查不到用户时至少包含自己，避免 IN () 空列表导致 SQL 语法错误
+        if (result.isEmpty() || !result.contains(user.getUserId())) {
+            result.add(user.getUserId());
+        }
+        return result;
     }
 
     /**
