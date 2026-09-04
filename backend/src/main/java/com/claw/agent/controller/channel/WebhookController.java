@@ -3,11 +3,13 @@ package com.claw.agent.controller.channel;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.claw.agent.common.Result;
 import com.claw.agent.common.ResultCode;
-import com.claw.agent.mapper.UserMapper;
 import com.claw.agent.mapper.RoleMapper;
+import com.claw.agent.mapper.UserMapper;
+import com.claw.agent.mapper.UserTenantMapper;
 import com.claw.agent.model.Role;
 import com.claw.agent.model.User;
 import com.claw.agent.model.UserChannel;
+import com.claw.agent.model.UserTenant;
 import com.claw.agent.model.dto.ChatEvent;
 import com.claw.agent.model.dto.ChatRequest;
 import com.claw.agent.security.LoginUser;
@@ -15,16 +17,11 @@ import com.claw.agent.service.AgentService;
 import com.claw.agent.service.UserChannelService;
 import com.claw.agent.service.channel.ChannelAdapter;
 import com.claw.agent.service.channel.ChannelAdapterRegistry;
-import io.swagger.v3.oas.annotations.tags.Tag;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
@@ -52,6 +49,7 @@ public class WebhookController {
     private final AgentService agentService;
     private final UserMapper userMapper;
     private final RoleMapper roleMapper;
+    private final UserTenantMapper userTenantMapper;
 
     /**
      * 接收渠道消息推送。
@@ -203,9 +201,15 @@ public class WebhookController {
         if (user == null) {
             return null;
         }
+        // tenant_id 已迁移到 sys_user_tenant，从关联表取默认组织
+        UserTenant ut = userTenantMapper.selectOne(new LambdaQueryWrapper<UserTenant>()
+                .eq(UserTenant::getUserId, userId)
+                .eq(UserTenant::getIsDefault, 1)
+                .last("LIMIT 1"));
+        Long tenantId = ut != null ? ut.getTenantId() : null;
         List<Role> roles = roleMapper.selectRolesByUserId(userId);
         List<String> roleKeys = roles.stream().map(Role::getRoleKey).toList();
-        return new LoginUser(user.getId(), user.getUsername(), user.getTenantId(), roleKeys);
+        return new LoginUser(user.getId(), user.getUsername(), tenantId, roleKeys);
     }
 
     /**

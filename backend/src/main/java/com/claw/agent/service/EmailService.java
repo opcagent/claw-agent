@@ -6,6 +6,8 @@ import com.claw.agent.common.CryptoUtil;
 import com.claw.agent.common.ResultCode;
 import com.claw.agent.mapper.EmailConfigMapper;
 import com.claw.agent.model.EmailConfig;
+import jakarta.mail.MessagingException;
+import jakarta.mail.internet.MimeMessage;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.mail.javamail.JavaMailSender;
@@ -13,8 +15,6 @@ import org.springframework.mail.javamail.JavaMailSenderImpl;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
 
-import jakarta.mail.MessagingException;
-import jakarta.mail.internet.MimeMessage;
 import java.util.List;
 import java.util.Properties;
 

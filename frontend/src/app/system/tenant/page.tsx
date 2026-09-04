@@ -1,11 +1,10 @@
 ﻿"use client";
 
 /**
- * 租户管理：租户列表 / 新增 / 修改 / 删除，仅平台管理员可见可操作。
- * 菜单隐藏 + 页面守卫 + 后端 isAdmin 三重防护。
+ * 租户空间：平台管理员完整 CRUD 管理租户；其他角色只读查看自己所属的租户信息。
+ * 后端 /api/adminTenant/my 端点对任何登录用户开放（方法级 @PreAuthorize 覆盖类级 admin 限制）。
  */
 import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Pencil, Plus, Trash2, UserCog } from "lucide-react";
 import AppShell from "@/components/app-shell";
@@ -51,6 +50,16 @@ function TenantAdminPage() {
   const [tenantUsers, setTenantUsers] = useState<SysUser[]>([]);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [loadingUsers, setLoadingUsers] = useState(false);
+
+  // 非管理员：只读查看自己所属租户
+  const [myTenant, setMyTenant] = useState<SysTenant | null>(null);
+  useEffect(() => {
+    if (!isAdmin) {
+      api.get<SysTenant>("/api/adminTenant/my")
+        .then((res) => setMyTenant(res.data))
+        .catch(() => {});
+    }
+  }, [isAdmin]);
 
   const load = useCallback(async () => {
     try {
@@ -151,9 +160,50 @@ function TenantAdminPage() {
 
   if (!isAdmin) {
     return (
-      <p className="p-10 text-center text-sm text-muted-foreground">
-        仅平台管理员可维护租户
-      </p>
+      <AppShell>
+        <div className="h-full overflow-auto p-6">
+          <div className="space-y-4">
+            <div>
+              <h1 className="text-xl font-semibold text-slate-800">租户空间</h1>
+              <p className="text-sm text-slate-500">查看当前所属组织信息</p>
+            </div>
+            {myTenant ? (
+              <div className="rounded-2xl border border-slate-200/70 bg-white p-6 shadow-sm">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <p className="text-xs text-muted-foreground">租户ID</p>
+                    <p className="font-mono text-sm font-medium text-slate-700">{myTenant.id}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">租户编码</p>
+                    <p className="font-mono text-sm font-medium text-slate-700">{myTenant.tenantCode}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">租户名称</p>
+                    <p className="text-sm font-medium text-slate-700">{myTenant.tenantName}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">状态</p>
+                    <Badge variant={myTenant.status === 1 ? "default" : "secondary"}>
+                      {myTenant.status === 1 ? "启用" : "禁用"}
+                    </Badge>
+                  </div>
+                  {myTenant.remark && (
+                    <div className="sm:col-span-2">
+                      <p className="text-xs text-muted-foreground">备注</p>
+                      <p className="text-sm text-slate-600">{myTenant.remark}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-slate-200/70 bg-white p-10 text-center shadow-sm">
+                <p className="text-sm text-muted-foreground">暂无租户信息</p>
+              </div>
+            )}
+          </div>
+        </div>
+      </AppShell>
     );
   }
 
@@ -427,18 +477,7 @@ function TenantAdminPage() {
 }
 
 export default function Page() {
-  const { ready } = useAuthGuard({ requireTenantAdmin: true });
-  const router = useRouter();
-  const hydrated = useAuthStore((s) => s.hydrated);
-  const isAdmin = useAuthStore((s) => s.isAdmin)();
-
-  // 租户管理为平台管理员专属，租户管理员拦回首页
-  useEffect(() => {
-    if (ready && !isAdmin) {
-      router.replace("/");
-    }
-  }, [ready, isAdmin, router]);
-
-  if (!ready || (hydrated && !isAdmin)) return null;
+  const { ready } = useAuthGuard();
+  if (!ready) return null;
   return <TenantAdminPage />;
 }

@@ -5,9 +5,9 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.claw.agent.common.BizException;
 import com.claw.agent.common.ResultCode;
 import com.claw.agent.common.UserContextHolder;
+import com.claw.agent.config.agent.QuartzSchedulerConfig;
 import com.claw.agent.mapper.ScheduledTaskLogMapper;
 import com.claw.agent.mapper.ScheduledTaskMapper;
-import com.claw.agent.model.ChatMessage;
 import com.claw.agent.model.ScheduledTask;
 import com.claw.agent.model.ScheduledTaskLog;
 import com.claw.agent.model.dto.ChatEvent;
@@ -22,15 +22,14 @@ import org.springframework.scheduling.support.CronExpression;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
-import reactor.core.scheduler.Schedulers;
 
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.List;
 
 /**
- * 定时任务服务实现：CRUD + 调度执行 + 日志记录。
+ * 定时任务服务实现：CRUD + Quartz 调度 + 日志记录。
  * <p>
+ * 调度由 AgentScope Quartz 扩展驱动（{@link QuartzSchedulerConfig}），
  * 核心执行逻辑：模拟用户身份 → 构建 ChatRequest → 调用 AgentService → 收集结果 → 可选邮件通知。
  * Cron 解析使用 Spring 内置的 {@link CronExpression}（支持 6 位 Spring 格式，兼容 5 位标准格式）。
  */
@@ -42,6 +41,7 @@ public class ScheduledTaskServiceImpl extends ServiceImpl<ScheduledTaskMapper, S
     private final ScheduledTaskLogMapper taskLogMapper;
     private final AgentService agentService;
     private final EmailService emailService;
+    private final QuartzSchedulerConfig quartzScheduler;
 
     @Override
     public List<ScheduledTask> listByUser(LoginUser user) {
@@ -70,6 +70,14 @@ public class ScheduledTaskServiceImpl extends ServiceImpl<ScheduledTaskMapper, S
         task.setEnabled(task.getEnabled() == null ? 1 : task.getEnabled());
         task.setNextRunTime(calculateNextRunTime(task.getCronExpr()));
         baseMapper.insert(task);
+        // 启用状态时注册到 Quartz Scheduler
+        if (Integer.valueOf(1).equals(task.getEnabled())) {
+            try {
+                quartzScheduler.scheduleTask(task);
+            } catch (Exception e) {
+                log.warn("注册 Quartz 任务失败: taskId={}", task.getId(), e);
+            }
+        }
     }
 
     @Override
@@ -97,28 +105,51 @@ public class ScheduledTaskServiceImpl extends ServiceImpl<ScheduledTaskMapper, S
         // 重新计算下次执行时间
         existing.setNextRunTime(calculateNextRunTime(existing.getCronExpr()));
         baseMapper.updateById(existing);
+        // 同步更新 Quartz 调度（Cron 可能变更）
+        try {
+            quartzScheduler.rescheduleTask(existing);
+        } catch (Exception e) {
+            log.warn("更新 Quartz 任务失败: taskId={}", existing.getId(), e);
+        }
     }
 
     @Override
     public void deleteTask(LoginUser user, Long id) {
         getAndCheckOwnership(user, id);
+        // 先从 Quartz 移除调度，再删数据库记录
+        try {
+            quartzScheduler.unscheduleTask(id);
+        } catch (Exception e) {
+            log.warn("取消 Quartz 任务失败: taskId={}", id, e);
+        }
         baseMapper.deleteById(id);
     }
 
     @Override
     public void toggleTask(LoginUser user, Long id) {
         ScheduledTask existing = getAndCheckOwnership(user, id);
-        existing.setEnabled(Integer.valueOf(1).equals(existing.getEnabled()) ? 0 : 1);
-        if (Integer.valueOf(1).equals(existing.getEnabled())) {
+        boolean enabling = !Integer.valueOf(1).equals(existing.getEnabled());
+        existing.setEnabled(enabling ? 1 : 0);
+        if (enabling) {
             existing.setNextRunTime(calculateNextRunTime(existing.getCronExpr()));
         }
         baseMapper.updateById(existing);
+        // 同步 Quartz 调度：启用 → 注册，禁用 → 移除
+        try {
+            if (enabling) {
+                quartzScheduler.scheduleTask(existing);
+            } else {
+                quartzScheduler.unscheduleTask(id);
+            }
+        } catch (Exception e) {
+            log.warn("切换 Quartz 任务状态失败: taskId={}, enabling={}", id, enabling, e);
+        }
     }
 
     @Override
     public String runNow(LoginUser user, Long id) {
         ScheduledTask task = getAndCheckOwnership(user, id);
-        return executeTask(task);
+        return doExecuteTask(task);
     }
 
     @Override
@@ -132,47 +163,18 @@ public class ScheduledTaskServiceImpl extends ServiceImpl<ScheduledTaskMapper, S
     }
 
     @Override
-    public void scanAndExecuteDueTasks() {
-        LocalDateTime now = LocalDateTime.now();
-        List<ScheduledTask> dueTasks = baseMapper.selectList(new LambdaQueryWrapper<ScheduledTask>()
-                .eq(ScheduledTask::getEnabled, 1)
-                .le(ScheduledTask::getNextRunTime, now)
-                .last("LIMIT 10")); // 每次最多处理 10 个，防止并发堆积
-
-        for (ScheduledTask task : dueTasks) {
-            try {
-                // 异步执行，不阻塞调度线程
-                executeTaskAsync(task);
-            } catch (Exception e) {
-                log.error("定时任务执行异常: taskId={}, taskName={}", task.getId(), task.getTaskName(), e);
-            }
+    public void executeScheduledTask(long taskId) {
+        ScheduledTask task = baseMapper.selectById(taskId);
+        if (task == null) {
+            log.warn("定时任务不存在: taskId={}", taskId);
+            return;
         }
-    }
-
-    /**
-     * 异步执行任务：在 boundedElastic 线程池中运行，模拟用户身份调用 Agent。
-     */
-    private void executeTaskAsync(ScheduledTask task) {
-        Flux.<String>create(sink -> {
-            try {
-                String result = doExecuteTask(task);
-                sink.next(result);
-                sink.complete();
-            } catch (Exception e) {
-                sink.error(e);
-            }
-        }).subscribeOn(Schedulers.boundedElastic()).subscribe(
-                result -> log.info("定时任务执行成功: taskId={}, result={}", task.getId(),
-                        result.length() > 100 ? result.substring(0, 100) + "..." : result),
-                error -> log.error("定时任务执行失败: taskId={}", task.getId(), error)
-        );
-    }
-
-    /**
-     * 同步执行任务（runNow 调用）：模拟用户身份 → 构建请求 → 调用 Agent → 收集结果。
-     */
-    private String executeTask(ScheduledTask task) {
-        return doExecuteTask(task);
+        if (!Integer.valueOf(1).equals(task.getEnabled())) {
+            log.warn("定时任务已禁用，跳过执行: taskId={}", taskId);
+            return;
+        }
+        // Quartz 线程为普通阻塞线程，可直接执行
+        doExecuteTask(task);
     }
 
     /**

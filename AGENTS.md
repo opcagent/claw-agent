@@ -20,7 +20,8 @@ claw-agent 是一个面向中小企业和个人开发者的 Agent 平台：
 ```
 controller  → 只做参数校验与协议转换，不写业务逻辑；按模块分包：auth（认证）/ chat（对话与上传）/ agent（预设与配置）/ system（用户/角色/部门/菜单/租户/字典/日志）
 service     → 业务逻辑层（接口 + Impl：接口 extends IService<T>，实现 extends ServiceImpl<Mapper, Entity> implements 接口，实现类放 service/impl）
-mapper      → 数据访问层（MyBatis Plus BaseMapper；自定义 SQL 一律写在 resources/mapper/*.xml，禁用 @Select 等注解 SQL）
+mapper      → 数据访问层（MyBatis Plus BaseMapper；自定义 SQL 一律写在 resources/mapper/*.xml，禁用 @Select 等注解 SQL）；
+              涉及联表（如 sys_user JOIN sys_user_tenant）的查询禁止在 Java 层用 inSql 拼接字符串，必须在 XML 中定义
 model/pojo  → 实体（对应表，业务实体一律 extends BaseEntity）、DTO（请求/响应对象）、枚举
 config      → Spring 配置类（Agent / Security / MyBatis / CORS）
 security    → JWT 过滤器、UserDetailsService
@@ -354,6 +355,7 @@ Agent 通过内置工具调用子 Agent：
 
 - 表名、字段名小写下划线（`sys_user`、`create_time`）；
 - 业务表必备六审计字段：`create_time`、`update_time`、`creator`、`updater`、`creator_id`、`updater_id`；实体继承 `model.BaseEntity`，六字段由 `AuditMetaObjectHandler` 自动填充（操作人取自 `UserContextHolder`，ID 来自 JWT 的 `userId` 声明），业务代码禁止手工 set；
+- **用户表结构**：`sys_user` 仅存跨组织共享的基础属性（用户名/密码/昵称/手机/邮箱/性别/状态/备注），**不含** `tenant_id` / `dept_id`；用户的组织归属（租户、部门、角色、职位）统一存 `sys_user_tenant`，是组织维度的唯一 source of truth；按组织/部门查询用户必须经 `sys_user_tenant` 联表，禁止在 `sys_user` 上直接过滤；
 - 日志分表存储：业务操作日志 `sys_oper_log`（由 ReactiveSupport 统一写入，成功失败均记）、登录登出日志 `sys_login_log`（由 AuthService 写入），新管理端接口必须接入操作日志；
 - 删除优先逻辑删除；索引命名 `uk_` / `idx_` 前缀；
 - **表结构变更一律通过 Flyway 迁移脚本**：`backend/src/main/resources/db/migration/V<n>__<描述>.sql`；

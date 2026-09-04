@@ -3,6 +3,7 @@ package com.claw.agent.config.infra;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.agentscope.core.message.ContentBlock;
 import io.agentscope.core.message.ToolUseBlock;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
@@ -80,7 +81,11 @@ public class HitlPendingStore {
         String key = buildKey(username, sessionId);
         if (redisTemplate != null) {
             try {
-                String json = objectMapper.writeValueAsString(toolCalls);
+                // 反序列化需要 ContentBlock 多态类型鉴别器 "type"，
+                // 但 Jackson 序列化 final 子类 ToolUseBlock 时不会自动写入 type 属性，
+                // 因此用 writerFor(List<ContentBlock>) 强制走基类多态序列化路径
+                String json = objectMapper.writerFor(new TypeReference<List<ContentBlock>>() {})
+                        .writeValueAsString(toolCalls);
                 redisTemplate.opsForHash().put(REDIS_KEY, key, json);
                 // 每次写入刷新 TTL，防止 abandoned HITL 条目永久残留
                 redisTemplate.expire(REDIS_KEY, Duration.ofHours(TTL_HOURS));

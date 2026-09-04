@@ -9,19 +9,12 @@ import com.claw.agent.model.dto.SetAdminRequest;
 import com.claw.agent.model.dto.TenantCreateWithAdminRequest;
 import com.claw.agent.service.TenantService;
 import com.claw.agent.service.UserService;
-import jakarta.validation.Valid;
-import io.swagger.v3.oas.annotations.tags.Tag;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.web.bind.annotation.DeleteMapping;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.PutMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
 
 import java.util.List;
@@ -97,5 +90,24 @@ public class TenantController {
     @GetMapping("/{id}/users")
     public Mono<Result<List<User>>> tenantUsers(@PathVariable Long id) {
         return ReactiveSupport.call(u -> userService.listUsersByTenant(u, id));
+    }
+
+    /**
+     * 当前用户所属租户信息（只读，任何登录用户可访问）。
+     * <p>
+     * 方法级 {@code @PreAuthorize("isAuthenticated()")} 覆盖类级 admin 限制，
+     * 让普通成员也能在「租户空间」页面看到自己所属的租户信息。
+     */
+    @Operation(summary = "我的租户", description = "返回当前用户所属租户的只读信息")
+    @GetMapping("/my")
+    @PreAuthorize("isAuthenticated()")
+    public Mono<Result<Tenant>> myTenant() {
+        return ReactiveSupport.call(u -> {
+            // admin 不属于任何租户（tenantId=0），返回 null
+            if (u.isAdmin() || u.getTenantId() == null || u.getTenantId() == 0L) {
+                return null;
+            }
+            return tenantService.getById(u.getTenantId());
+        });
     }
 }

@@ -1,12 +1,12 @@
 package com.claw.agent.config;
 
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
 import com.claw.agent.config.infra.CaffeineCacheManager;
 import com.claw.agent.config.infra.RedisPubSub;
 import com.claw.agent.model.DictData;
 import com.claw.agent.model.Menu;
 import com.claw.agent.model.ModelProviderConfig;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;

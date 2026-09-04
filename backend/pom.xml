@@ -83,6 +83,13 @@
             <version>${agentscope.version}</version>
         </dependency>
 
+        <!-- AgentScope Quartz 调度扩展：定时任务自动触发 Agent 执行（含重试/持久化/分布式协调） -->
+        <dependency>
+            <groupId>io.agentscope</groupId>
+            <artifactId>agentscope-extensions-scheduler-quartz</artifactId>
+            <version>${agentscope.version}</version>
+        </dependency>
+
         <!-- ==================== Spring Boot ==================== -->
         <!-- WebFlux：响应式 Web，支持 SSE 流式输出 + 响应式文件上传（Part） -->
         <dependency>

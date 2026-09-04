@@ -7,18 +7,8 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.claw.agent.common.BizException;
 import com.claw.agent.common.ResultCode;
 import com.claw.agent.common.RoleConstants;
-import com.claw.agent.mapper.ChatSessionMapper;
-import com.claw.agent.mapper.DeptMapper;
-import com.claw.agent.mapper.RoleMapper;
-import com.claw.agent.mapper.TenantMapper;
-import com.claw.agent.mapper.UserMapper;
-import com.claw.agent.mapper.UserTenantMapper;
-import com.claw.agent.model.ChatSession;
-import com.claw.agent.model.Dept;
-import com.claw.agent.model.Role;
-import com.claw.agent.model.Tenant;
-import com.claw.agent.model.User;
-import com.claw.agent.model.UserTenant;
+import com.claw.agent.mapper.*;
+import com.claw.agent.model.*;
 import com.claw.agent.model.dto.UserCreateRequest;
 import com.claw.agent.security.LoginUser;
 import com.claw.agent.service.UserService;
@@ -61,14 +51,16 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
 
     @Override
     public List<User> listUsers(LoginUser current) {
-        LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<User>()
-                .orderByAsc(User::getId);
-        // 平台管理员跨租户查看全部用户，租户管理员只看本租户
-        if (!current.isAdmin()) {
-            wrapper.eq(User::getTenantId, current.getTenantId());
+        List<User> users;
+        if (current.isAdmin()) {
+            // 平台管理员查看全部用户
+            users = baseMapper.selectList(new LambdaQueryWrapper<User>()
+                    .orderByAsc(User::getId)
+                    .last("LIMIT " + LIST_LIMIT));
+        } else {
+            // 租户管理员只看本租户（经 sys_user_tenant 关联）
+            users = baseMapper.selectUsersByTenantId(current.getTenantId(), LIST_LIMIT);
         }
-        wrapper.last("LIMIT " + LIST_LIMIT);
-        List<User> users = baseMapper.selectList(wrapper);
         users.forEach(u -> u.setPassword(null));
         return users;
     }
@@ -77,10 +69,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     public List<User> listUsersByTenant(LoginUser current, Long tenantId) {
         // 仅平台管理员可跨租户查询，租户管理员只能查本租户
         Long targetTenant = current.isAdmin() ? tenantId : current.getTenantId();
-        List<User> users = baseMapper.selectList(new LambdaQueryWrapper<User>()
-                .eq(User::getTenantId, targetTenant)
-                .orderByAsc(User::getId)
-                .last("LIMIT " + LIST_LIMIT));
+        List<User> users = baseMapper.selectUsersByTenantId(targetTenant, LIST_LIMIT);
         users.forEach(u -> u.setPassword(null));
         return users;
     }
@@ -94,29 +83,34 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         // 入参收敛：防负数/超大分页拖垮数据库（分页插件 maxLimit 仅兜底）
         long safePage = Math.max(1, pageNum);
         long safeSize = Math.min(Math.max(1, pageSize), MAX_PAGE_SIZE);
-        LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<User>();
+        String kw = StringUtils.hasText(keyword) ? keyword.trim() : null;
         // 平台管理员跨租户查看，租户管理员只看本租户
-        if (!current.isAdmin()) {
-            wrapper.eq(User::getTenantId, current.getTenantId());
+        Long tenantId = current.isAdmin() ? null : current.getTenantId();
+        IPage<User> page;
+        if (deptId != null && tenantId != null) {
+            // 组织+部门筛选（经 sys_user_tenant 关联）
+            page = baseMapper.pageUsersByTenantIdAndDeptId(
+                    new Page<>(safePage, safeSize), tenantId, deptId, kw, status);
+        } else if (tenantId != null) {
+            // 仅组织筛选
+            page = baseMapper.pageUsersByTenantId(
+                    new Page<>(safePage, safeSize), tenantId, kw, status);
+        } else {
+            // 平台管理员：无组织过滤，走内置分页
+            LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<User>();
+            if (StringUtils.hasText(keyword)) {
+                String k = keyword.trim();
+                wrapper.and(w -> w.like(User::getUsername, k)
+                        .or().like(User::getNickname, k)
+                        .or().like(User::getPhone, k)
+                        .or().like(User::getEmail, k));
+            }
+            if (status != null) {
+                wrapper.eq(User::getStatus, status);
+            }
+            wrapper.orderByAsc(User::getId);
+            page = baseMapper.selectPage(new Page<>(safePage, safeSize), wrapper);
         }
-        // 关键词模糊搜索：匹配用户名/昵称/手机/邮箱任一即命中
-        if (StringUtils.hasText(keyword)) {
-            String kw = keyword.trim();
-            wrapper.and(w -> w.like(User::getUsername, kw)
-                    .or().like(User::getNickname, kw)
-                    .or().like(User::getPhone, kw)
-                    .or().like(User::getEmail, kw));
-        }
-        // 状态筛选
-        if (status != null) {
-            wrapper.eq(User::getStatus, status);
-        }
-        // 部门筛选
-        if (deptId != null) {
-            wrapper.eq(User::getDeptId, deptId);
-        }
-        wrapper.orderByAsc(User::getId);
-        IPage<User> page = baseMapper.selectPage(new Page<>(safePage, safeSize), wrapper);
         // 密码不下发（与 listUsers 同源的脱敏规则）
         page.getRecords().forEach(u -> u.setPassword(null));
         return page;
@@ -131,9 +125,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             throw new BizException(ResultCode.USER_EXISTS);
         }
         User user = new User();
-        user.setTenantId(current.getTenantId());
         checkDeptInTenant(current, request.getDeptId());
-        user.setDeptId(request.getDeptId());
         user.setUsername(request.getUsername());
         user.setPassword(passwordEncoder.encode(request.getPassword()));
         user.setNickname(request.getNickname());
@@ -167,10 +159,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     public void updateUser(LoginUser current, String id, User user) {
         User existed = selectInTenant(current, id);
         checkPlatformAdminProtected(current, existed);
-        checkDeptInTenant(current, user.getDeptId());
         existed.setNickname(user.getNickname());
         fillContact(existed, user.getPhone(), user.getEmail(), user.getGender());
-        existed.setDeptId(user.getDeptId());
+        // dept_id 已迁移到 sys_user_tenant，部门变更通过 saveUserRoles 接口处理
         // status 为 NOT NULL 列：请求未带时保留原值，避免空值穿透报 SQL 约束异常（500）
         if (user.getStatus() != null) {
             existed.setStatus(user.getStatus());
@@ -209,8 +200,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     @Override
     public List<Long> listUserRoles(LoginUser current, String id) {
         User existed = selectInTenant(current, id);
-        // 查询用户在目标组织内的角色（admin 跨租户时使用目标用户的 tenantId）
-        Long targetTenantId = current.isAdmin() ? existed.getTenantId() : current.getTenantId();
+        // 查询用户在目标组织内的角色（admin 跨租户时从 sys_user_tenant 取目标用户归属组织）
+        Long targetTenantId = current.isAdmin() ? resolveUserTenantId(existed.getId()) : current.getTenantId();
         return userTenantMapper.selectList(new LambdaQueryWrapper<UserTenant>()
                         .eq(UserTenant::getUserId, existed.getId())
                         .eq(UserTenant::getTenantId, targetTenantId)
@@ -222,8 +213,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     @Transactional(rollbackFor = Exception.class)
     public void saveUserRoles(LoginUser current, String id, List<Long> roleIds) {
         User existed = selectInTenant(current, id);
-        // admin 跨租户操作时使用目标用户的 tenantId
-        Long targetTenantId = current.isAdmin() ? existed.getTenantId() : current.getTenantId();
+        // admin 跨租户操作时从 sys_user_tenant 取目标用户的归属组织
+        Long targetTenantId = current.isAdmin() ? resolveUserTenantId(existed.getId()) : current.getTenantId();
         // 批量查询角色（避免循环内逐条 selectById）
         if (roleIds != null && !roleIds.isEmpty()) {
             List<Role> roles = roleMapper.selectBatchIds(roleIds);
@@ -248,7 +239,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
                 .eq(UserTenant::getUserId, existed.getId())
                 .eq(UserTenant::getTenantId, targetTenantId)
                 .last("LIMIT 1"));
-        Long preservedDeptId = existingUt != null ? existingUt.getDeptId() : existed.getDeptId();
+        Long preservedDeptId = existingUt != null ? existingUt.getDeptId() : null;
         String preservedPosition = existingUt != null ? existingUt.getPosition() : null;
         int preservedIsDefault = existingUt != null && existingUt.getIsDefault() != null
                 ? existingUt.getIsDefault() : 1;
@@ -342,7 +333,12 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         if (current.isAdmin()) {
             return existed;
         }
-        if (!current.getTenantId().equals(existed.getTenantId())) {
+        // 通过 sys_user_tenant 校验用户是否属于当前租户
+        Long count = userTenantMapper.selectCount(new LambdaQueryWrapper<UserTenant>()
+                .eq(UserTenant::getUserId, id)
+                .eq(UserTenant::getTenantId, current.getTenantId())
+                .eq(UserTenant::getStatus, 1));
+        if (count == null || count == 0) {
             throw new BizException(ResultCode.NOT_FOUND, "用户不存在");
         }
         return existed;
@@ -369,6 +365,20 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     }
 
     /**
+     * 查询用户归属的第一个组织ID（admin 跨租户操作时用于确定目标用户的归属组织）。
+     *
+     * @param userId 用户ID
+     * @return 组织ID，无记录时返回 null
+     */
+    private Long resolveUserTenantId(String userId) {
+        UserTenant ut = userTenantMapper.selectOne(new LambdaQueryWrapper<UserTenant>()
+                .eq(UserTenant::getUserId, userId)
+                .eq(UserTenant::getStatus, 1)
+                .last("LIMIT 1"));
+        return ut != null ? ut.getTenantId() : null;
+    }
+
+    /**
      * 生成规则用户ID：{租户编码}_{自增序号}。
      * <p>
      * 自增序号按租户维度递增，从 1 开始；查库取当前租户最大序号 +1。
@@ -385,11 +395,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             tenantCode = (tenant != null && org.springframework.util.StringUtils.hasText(tenant.getTenantCode()))
                     ? tenant.getTenantCode() : String.valueOf(tenantId);
         }
-        // 查当前租户下最大序号（按ID倒序取第一条，提取末尾数字部分）
-        User lastUser = baseMapper.selectOne(new LambdaQueryWrapper<User>()
-                .eq(User::getTenantId, tenantId)
-                .orderByDesc(User::getId)
-                .last("LIMIT 1"));
+        // 查当前租户下最大序号（经 sys_user_tenant 关联，按ID倒序取第一条，提取末尾数字部分）
+        User lastUser = baseMapper.selectLastUserByTenantId(tenantId);
         int nextSeq = 1;
         if (lastUser != null && lastUser.getId() != null) {
             String lastId = lastUser.getId();

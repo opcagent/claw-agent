@@ -7,9 +7,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
-import java.util.Iterator;
-import java.util.Map;
-
 /**
  * Agent 缓存失效器：封装 AgentRegistry 的缓存失效逻辑，供本地事件和 Redis Pub/Sub 共同调用。
  * <p>
