@@ -71,7 +71,8 @@ public class ChatController {
         if (!rateLimiter.tryAcquireGlobal()) {
             throw new BizException(ResultCode.RATE_LIMITED, "系统繁忙，当前并发请求过多，请稍后再试");
         }
-        shutdownManager.acquire();
+        // acquire 必须在 doOnSubscribe 内调用（订阅期），与 doFinally 的 release 配对；
+        // 若放在方法体（装配期），Flux 装配后未订阅时 activeStreams 只增不减 → 泄漏
         return SecurityUtil.currentUser()
                 .flatMapMany(user -> {
                     // 用户级限流：滑动窗口内请求过多，返回空流由 switchIfEmpty 转错误
@@ -87,6 +88,7 @@ public class ChatController {
                         .event(event.getType())
                         .data(event)
                         .build())
+                .doOnSubscribe(sub -> shutdownManager.acquire())
                 .doFinally(signal -> {
                     shutdownManager.release();
                     rateLimiter.releaseGlobal();
@@ -103,7 +105,6 @@ public class ChatController {
         if (!rateLimiter.tryAcquireGlobal()) {
             throw new BizException(ResultCode.RATE_LIMITED, "系统繁忙，请稍后再试");
         }
-        shutdownManager.acquire();
         return SecurityUtil.currentUser()
                 .flatMapMany(user -> {
                     if (!rateLimiter.tryAcquireUser(user.getUsername())) {
@@ -117,6 +118,7 @@ public class ChatController {
                         .event(event.getType())
                         .data(event)
                         .build())
+                .doOnSubscribe(sub -> shutdownManager.acquire())
                 .doFinally(signal -> {
                     shutdownManager.release();
                     rateLimiter.releaseGlobal();
@@ -155,7 +157,6 @@ public class ChatController {
         if (!rateLimiter.tryAcquireGlobal()) {
             throw new BizException(ResultCode.RATE_LIMITED, "系统繁忙，请稍后再试");
         }
-        shutdownManager.acquire();
         return SecurityUtil.currentUser()
                 .flatMapMany(user -> {
                     if (!rateLimiter.tryAcquireUser(user.getUsername())) {
@@ -168,6 +169,7 @@ public class ChatController {
                         .event(event.getType())
                         .data(event)
                         .build())
+                .doOnSubscribe(sub -> shutdownManager.acquire())
                 .doFinally(signal -> {
                     shutdownManager.release();
                     rateLimiter.releaseGlobal();
