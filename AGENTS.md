@@ -5,11 +5,12 @@
 
 ## 1. 项目概述
 
-claw-agent 是一个个人 Agent 平台：
+claw-agent 是一个面向中小企业和个人开发者的 Agent 平台：
 
 - 工程结构：仓库根目录下 `backend/`（Spring Boot 后端）与 `frontend/`（Next.js 前端）并列；
   后端构建与启动的工作目录必须是 `backend/`；AgentScope 工作区与上传目录使用绝对路径（`D:/claw-agent/.agentscope/workspace`、`D:/claw-agent/data/uploads`）；
-- 单实例 `HarnessAgent` 服务所有用户，按 `(userId, sessionId)` 隔离状态；
+- 渐进式弹性架构：单机模式 Redis 不可用时自动降级为内存/本地文件，零依赖启动；多实例模式 Redis 可用时 HITL/在线追踪/配置广播跨节点共享，支持水平扩展；
+- 全局单例 `HarnessAgent` 服务所有用户，按 `(userId, sessionId)` 隔离状态；
 - 满血接入 AgentScope：工作区、分层记忆、上下文压缩、技能自学习、子 Agent、Plan Mode、权限系统（HITL）、Middleware、事件流式；
 - 用户体系：Spring Security + JWT 无状态认证，RBAC（admin / tenant_admin / common 三角色）；
 - 聊天支持文字 / 图片 / 文件上传（多模态消息）。

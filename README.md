@@ -19,9 +19,9 @@
 
 # claw-agent (中文)
 
-**个人/小团队私有化部署的 AI Agent 平台** - 基于 AgentScope Java 2.0的多租户智能助手服务。
+**面向中小企业和个人开发者的 AI Agent 平台** - 基于 AgentScope Java 2.0 的多租户智能助手服务。
 
-单实例服务所有用户，按 `(userId, sessionId)` 隔离会话状态；支持流式对话（SSE）、多模态消息、HITL 人工审批、动态工具系统、Token 使用统计与完整的 RBAC 权限体系。
+渐进式弹性架构：单机模式零依赖启动（Redis 降级为内存），多实例模式支持水平扩展（Redis 共享状态）。按 `(userId, sessionId)` 隔离会话状态；支持流式对话（SSE）、多模态消息、HITL 人工审批、动态工具系统、Token 使用统计与完整的 RBAC 权限体系。
 
 **核心特点**：
 - 🆓 **零成本启动**：内置 Ollama 本地模型，无需 API Key 即可使用
@@ -42,7 +42,7 @@
 | **数据** | MySQL 8.x + Flyway 迁移 · MyBatis Plus 3.5 · Redis 7.x（Agent 会话状态存储） |
 | **前端** | Next.js 16 · React 19 · TypeScript 5 · Tailwind CSS 4 · Base UI/shadcn · Zustand · Recharts |
 
-> **架构说明**：单实例架构，一个 Spring Boot 服务服务所有用户，通过 `(userId, sessionId)` 实现会话隔离。适合个人开发者和小团队（5-50人），不适合大规模并发场景。
+> **架构说明**：渐进式弹性架构——单机模式 Redis 不可用时自动降级为内存/本地文件，零依赖启动；多实例模式 Redis 可用时 HITL/在线追踪/配置广播跨节点共享，支持负载均衡水平扩展。
 
 ## 项目结构
 
@@ -338,9 +338,9 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 
 # claw-agent (English)
 
-**A private AI Agent platform for individuals and small teams** - Multi-tenant intelligent assistant service based on AgentScope Java 2.0.
+**An AI Agent platform for SMEs and individual developers** - Multi-tenant intelligent assistant service based on AgentScope Java 2.0.
 
-Single-instance service serving all users, with session isolation by `(userId, sessionId)`; supports streaming chat (SSE), multimodal messages, HITL human approval, dynamic tool system, Token usage tracking, and complete RBAC permission system.
+Progressive elastic architecture: zero-dependency standalone mode with Redis fallback to in-memory; multi-instance mode with Redis-backed shared state for horizontal scaling. Session isolation by `(userId, sessionId)`; supports streaming chat (SSE), multimodal messages, HITL human approval, dynamic tool system, Token usage tracking, and complete RBAC permission system.
 
 **Core Features**:
 - 🆓 **Zero-cost startup**: Built-in free model providers (Ollama/Groq/HuggingFace), no API Key required
@@ -358,7 +358,7 @@ Single-instance service serving all users, with session isolation by `(userId, s
 | **Data** | MySQL 8.x + Flyway migrations · MyBatis Plus 3.5 · Redis 7.x (Agent session state storage) |
 | **Frontend** | Next.js 16 · React 19 · TypeScript 5 · Tailwind CSS 4 · Base UI/shadcn · Zustand · Recharts |
 
-> **Architecture**: Single-instance architecture, one Spring Boot service serving all users, session isolation via `(userId, sessionId)`. Suitable for individual developers and small teams (5-50 people), not for large-scale concurrent scenarios.
+> **Architecture**: Progressive elastic architecture — standalone mode with automatic Redis fallback to in-memory for zero-dependency startup; multi-instance mode with Redis-backed HITL/online tracking/config broadcast for horizontal scaling.
 
 ## Project Structure
 
