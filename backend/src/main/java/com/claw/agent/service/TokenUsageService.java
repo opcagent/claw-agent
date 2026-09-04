@@ -7,11 +7,13 @@ import com.claw.agent.model.TokenUsageLog;
 import com.claw.agent.model.TokenUsageSummary;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Token 使用统计服务。
@@ -246,5 +248,88 @@ public class TokenUsageService {
                .last("LIMIT 500"); // 大租户分页请使用分页接口
 
         return summaryMapper.selectList(wrapper);
+    }
+
+    // ==================== Token 配额检查 ====================
+
+    /**
+     * 检查用户当月 Token 使用量与配额的关系。
+     * <p>
+     * 返回状态信息供 SSE 流注入告警事件，不阻断对话。
+     *
+     * @param userId          用户ID
+     * @param tenantId        租户ID
+     * @param quotaLimitWan   配额上限（万 tokens，0=不限制）
+     * @param warnPercent     告警阈值百分比（如 80 表示 80%）
+     * @return 配额状态（包含百分比、是否告警、是否超额），配额为 0 时返回 null 表示不限制
+     */
+    public QuotaStatus checkQuota(String userId, Long tenantId, int quotaLimitWan, int warnPercent) {
+        if (quotaLimitWan <= 0) {
+            return null; // 0 = 不限制
+        }
+        long quotaLimit = (long) quotaLimitWan * 10_000;
+        TokenUsageSummary summary = getCurrentMonthSummary(userId, tenantId);
+        long usedTokens = summary != null && summary.getTotalTokens() != null ? summary.getTotalTokens() : 0;
+        int percent = quotaLimit > 0 ? (int) (usedTokens * 100 / quotaLimit) : 0;
+        return new QuotaStatus(usedTokens, quotaLimit, percent,
+                percent >= warnPercent, percent >= 100);
+    }
+
+    /**
+     * 定期清理 180 天前的 Token 使用流水。
+     * <p>
+     * 每月 1 日凌晨 3 点执行，释放数据库空间；汇总表不受影响。
+     * 清理失败仅记日志，不影响任何业务。
+     */
+    @Scheduled(cron = "0 0 3 1 * ?")
+    public void scheduledLogCleanup() {
+        try {
+            int deleted = cleanupOldLogs(180);
+            log.info("定时清理 Token 流水完成: 删除 {} 条记录", deleted);
+        } catch (Exception e) {
+            log.error("定时清理 Token 流水失败", e);
+        }
+    }
+
+    /**
+     * 清理指定天数前的 Token 使用流水记录。
+     * <p>
+     * 由定时任务调用，释放数据库空间。汇总表不受影响。
+     *
+     * @param retainDays 保留天数（清理该天数之前的记录）
+     * @return 删除的记录数
+     */
+    public int cleanupOldLogs(int retainDays) {
+        if (retainDays <= 0) retainDays = 180;
+        LocalDateTime cutoff = LocalDateTime.now().minusDays(retainDays);
+        LambdaQueryWrapper<TokenUsageLog> wrapper = new LambdaQueryWrapper<>();
+        wrapper.lt(TokenUsageLog::getUsageTime, cutoff);
+        int deleted = logMapper.delete(wrapper);
+        log.info("Token 流水清理完成: cutoff={}, deleted={}", cutoff, deleted);
+        return deleted;
+    }
+
+    /**
+     * Token 配额状态（不可变记录）。
+     *
+     * @param usedTokens   已使用 tokens
+     * @param quotaLimit   配额上限
+     * @param percent      使用百分比
+     * @param warn         是否达到告警阈值
+     * @param exceeded     是否已超额
+     */
+    public record QuotaStatus(long usedTokens, long quotaLimit, int percent,
+                              boolean warn, boolean exceeded) {
+
+        /** 转为前端/事件可消费的 Map */
+        public Map<String, Object> toMap() {
+            return Map.of(
+                    "usedTokens", usedTokens,
+                    "quotaLimit", quotaLimit,
+                    "percent", percent,
+                    "warn", warn,
+                    "exceeded", exceeded
+            );
+        }
     }
 }
