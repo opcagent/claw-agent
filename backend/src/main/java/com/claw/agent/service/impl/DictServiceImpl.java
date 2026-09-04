@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.claw.agent.common.BizException;
 import com.claw.agent.common.ResultCode;
+import com.claw.agent.config.infra.RedisPubSub;
 import com.claw.agent.mapper.DictDataMapper;
 import com.claw.agent.mapper.DictTypeMapper;
 import com.claw.agent.model.DictData;
@@ -38,6 +39,8 @@ public class DictServiceImpl extends ServiceImpl<DictDataMapper, DictData> imple
     private final DictTypeMapper dictTypeMapper;
     /** 字典数据缓存（tenantId:dictType → 合并后的字典列表） */
     private final Cache<String, List<DictData>> dictDataCache;
+    /** Redis Pub/Sub（可选） */
+    private final RedisPubSub redisPubSub;
 
     @Override
     public List<DictData> listDataByType(LoginUser current, String dictType) {
@@ -189,5 +192,6 @@ public class DictServiceImpl extends ServiceImpl<DictDataMapper, DictData> imple
                     .filter(k -> k.startsWith(platformPrefix))
                     .forEach(dictDataCache::invalidate);
         }
+        if (redisPubSub != null) redisPubSub.publishCacheInvalidate("dictDataCache");
     }
 }
