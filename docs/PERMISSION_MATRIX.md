@@ -79,15 +79,15 @@
 
 ### 3.3 配置作用域权限
 
-ConfigController 和 CapabilityController 共享三级作用域：
+ConfigController 和 CapabilityController 共享三级作用域。前端根据角色自动确定 scope，后端按 scope 校验权限：
 
-| 作用域 | admin | tenant_admin | common |
-|--------|:-----:|:------------:|:------:|
-| PLATFORM | ✅ 可读写 | ❌ 只读 | ❌ 只读 |
-| TENANT | ✅ 可读写 | ✅ 可读写 | ❌ 只读 |
-| USER | ✅ 可读写 | ✅ 可读写 | ✅ 可读写 |
+| 角色 | 前端发送 scope | 后端校验规则 | 可操作范围 |
+|------|:---:|:---:|:---:|
+| admin | `PLATFORM` | `isAdmin()` | 平台级配置（全局生效） |
+| tenant_admin | `TENANT` | `isTenantAdmin()` | 租户级配置（本租户生效，覆盖平台级） |
+| common | `USER` | 任何登录用户 | 用户级配置（仅本人生效，覆盖租户/平台级） |
 
-> `checkScopePermission` 规则：PLATFORM → `isAdmin()`；TENANT → `isTenantAdmin()`（admin 也满足，因为 `isAdmin()` 蕴含 `isTenantAdmin()`）；USER → 任何登录用户。
+> 配置解析遵循就近覆盖原则：USER > TENANT > PLATFORM。每个角色只能操作自己作用域的配置，避免越权。
 
 ### 3.4 前端配置页 Tab 过滤
 

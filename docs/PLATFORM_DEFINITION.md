@@ -1,7 +1,7 @@
 # Claw Agent 平台定义文档
 
 > **版本**: 2.2  
-> **更新日期**: 2026-09-02  
+> **更新日期**: 2026-09-04  
 > **状态**: 生产就绪  
 > **技术栈**: Spring Boot 3.5 + AgentScope Java 2.0 + Next.js 16 + MySQL 8 + Redis
 
@@ -973,6 +973,12 @@ mysql -u root -p claw_agent < backup_20260827.sql
 ---
 
 ## 12. 更新日志
+
+### v2.2 (2026-09-04)
+- ✅ 配置页作用域按角色动态化：admin→PLATFORM / tenant_admin→TENANT / common→USER
+- ✅ Token 趋势图月份去重：后端新增 `aggregateByMonth` 按月聚合，修复多租户/多用户导致重复月份
+- ✅ 配置页 UI 优化：隐藏原始字段名，统一显示中文描述；操作列 sticky 固定
+- ✅ MyBatis Plus 使用规约：能用 BaseMapper 解决的禁止写自定义 XML
 
 ### v2.1 (2026-09-01)
 - ✅ 新增会话归档功能（V49 迁移，归档/恢复/删除）
