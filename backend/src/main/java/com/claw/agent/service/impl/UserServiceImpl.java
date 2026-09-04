@@ -10,15 +10,15 @@ import com.claw.agent.common.RoleConstants;
 import com.claw.agent.mapper.ChatSessionMapper;
 import com.claw.agent.mapper.DeptMapper;
 import com.claw.agent.mapper.RoleMapper;
+import com.claw.agent.mapper.TenantMapper;
 import com.claw.agent.mapper.UserMapper;
-import com.claw.agent.mapper.UserRoleMapper;
+import com.claw.agent.mapper.UserTenantMapper;
 import com.claw.agent.model.ChatSession;
 import com.claw.agent.model.Dept;
 import com.claw.agent.model.Role;
-import com.claw.agent.mapper.TenantMapper;
 import com.claw.agent.model.Tenant;
 import com.claw.agent.model.User;
-import com.claw.agent.model.UserRole;
+import com.claw.agent.model.UserTenant;
 import com.claw.agent.model.dto.UserCreateRequest;
 import com.claw.agent.security.LoginUser;
 import com.claw.agent.service.UserService;
@@ -36,7 +36,7 @@ import java.util.regex.Pattern;
  * 用户管理服务实现。
  * <p>
  * 业务规则：用户名全局唯一、密码 BCrypt 加密、跨租户访问一律 404；
- * 角色分配全量替换且仅允许本租户角色（防跨租户提权）。
+ * 角色分配通过 sys_user_tenant 管理（合并成员资格 + 角色），按组织独立分配。
  */
 @Slf4j
 @Service
@@ -49,18 +49,26 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     public static final Pattern EMAIL_PATTERN =
             Pattern.compile("^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$");
 
-    private final UserRoleMapper userRoleMapper;
+    private final UserTenantMapper userTenantMapper;
     private final RoleMapper roleMapper;
     private final DeptMapper deptMapper;
     private final ChatSessionMapper chatSessionMapper;
     private final TenantMapper tenantMapper;
     private final PasswordEncoder passwordEncoder;
 
+    /** 全量列表最大条数（防拉全表拖垮内存与网络，大场景请使用 /page 分页接口） */
+    private static final int LIST_LIMIT = 1000;
+
     @Override
     public List<User> listUsers(LoginUser current) {
-        List<User> users = baseMapper.selectList(new LambdaQueryWrapper<User>()
-                .eq(User::getTenantId, current.getTenantId())
-                .orderByAsc(User::getId));
+        LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<User>()
+                .orderByAsc(User::getId);
+        // 平台管理员跨租户查看全部用户，租户管理员只看本租户
+        if (!current.isAdmin()) {
+            wrapper.eq(User::getTenantId, current.getTenantId());
+        }
+        wrapper.last("LIMIT " + LIST_LIMIT);
+        List<User> users = baseMapper.selectList(wrapper);
         users.forEach(u -> u.setPassword(null));
         return users;
     }
@@ -71,7 +79,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         Long targetTenant = current.isAdmin() ? tenantId : current.getTenantId();
         List<User> users = baseMapper.selectList(new LambdaQueryWrapper<User>()
                 .eq(User::getTenantId, targetTenant)
-                .orderByAsc(User::getId));
+                .orderByAsc(User::getId)
+                .last("LIMIT " + LIST_LIMIT));
         users.forEach(u -> u.setPassword(null));
         return users;
     }
@@ -85,8 +94,11 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         // 入参收敛：防负数/超大分页拖垮数据库（分页插件 maxLimit 仅兜底）
         long safePage = Math.max(1, pageNum);
         long safeSize = Math.min(Math.max(1, pageSize), MAX_PAGE_SIZE);
-        LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<User>()
-                .eq(User::getTenantId, current.getTenantId());
+        LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<User>();
+        // 平台管理员跨租户查看，租户管理员只看本租户
+        if (!current.isAdmin()) {
+            wrapper.eq(User::getTenantId, current.getTenantId());
+        }
         // 关键词模糊搜索：匹配用户名/昵称/手机/邮箱任一即命中
         if (StringUtils.hasText(keyword)) {
             String kw = keyword.trim();
@@ -131,6 +143,23 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         // 生成规则ID：租户编码_自增序号
         user.setId(generateUserId(current.getTenantId()));
         baseMapper.insert(user);
+
+        // 同步创建 sys_user_tenant 关联（默认分配 common 角色）
+        Role commonRole = roleMapper.selectOne(new LambdaQueryWrapper<Role>()
+                .eq(Role::getTenantId, current.getTenantId())
+                .eq(Role::getRoleKey, RoleConstants.ROLE_COMMON)
+                .last("LIMIT 1"));
+        if (commonRole != null) {
+            UserTenant ut = new UserTenant();
+            ut.setUserId(user.getId());
+            ut.setTenantId(current.getTenantId());
+            ut.setRoleId(commonRole.getId());
+            ut.setDeptId(request.getDeptId());
+            ut.setPosition(request.getPosition());
+            ut.setStatus(1);
+            ut.setIsDefault(1);
+            userTenantMapper.insert(ut);
+        }
     }
 
     @Override
@@ -168,8 +197,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             throw new BizException(ResultCode.PARAM_ERROR, "不能删除当前登录账号");
         }
         baseMapper.deleteById(id);
-        // 同步清理用户-角色关联，避免残留脏数据
-        userRoleMapper.delete(new LambdaQueryWrapper<UserRole>().eq(UserRole::getUserId, id));
+        // 同步清理用户在所有组织的关联记录（成员资格 + 角色）
+        userTenantMapper.delete(new LambdaQueryWrapper<UserTenant>()
+                .eq(UserTenant::getUserId, id));
         // 同步清理会话元数据（按用户名隔离），避免同名再注册时看到前任会话；
         // 登录日志属审计痕迹，刻意保留不删
         chatSessionMapper.delete(new LambdaQueryWrapper<ChatSession>()
@@ -179,20 +209,32 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     @Override
     public List<Long> listUserRoles(LoginUser current, String id) {
         User existed = selectInTenant(current, id);
-        return userRoleMapper.selectList(new LambdaQueryWrapper<UserRole>()
-                        .eq(UserRole::getUserId, existed.getId()))
-                .stream().map(UserRole::getRoleId).toList();
+        // 查询用户在目标组织内的角色（admin 跨租户时使用目标用户的 tenantId）
+        Long targetTenantId = current.isAdmin() ? existed.getTenantId() : current.getTenantId();
+        return userTenantMapper.selectList(new LambdaQueryWrapper<UserTenant>()
+                        .eq(UserTenant::getUserId, existed.getId())
+                        .eq(UserTenant::getTenantId, targetTenantId)
+                        .eq(UserTenant::getStatus, 1))
+                .stream().map(UserTenant::getRoleId).toList();
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void saveUserRoles(LoginUser current, String id, List<Long> roleIds) {
         User existed = selectInTenant(current, id);
-        if (roleIds != null) {
+        // admin 跨租户操作时使用目标用户的 tenantId
+        Long targetTenantId = current.isAdmin() ? existed.getTenantId() : current.getTenantId();
+        // 批量查询角色（避免循环内逐条 selectById）
+        if (roleIds != null && !roleIds.isEmpty()) {
+            List<Role> roles = roleMapper.selectBatchIds(roleIds);
+            java.util.Map<Long, Role> roleMap = new java.util.HashMap<>();
+            for (Role r : roles) {
+                roleMap.put(r.getId(), r);
+            }
             for (Long roleId : roleIds) {
-                Role role = roleMapper.selectById(roleId);
-                if (role == null || !current.getTenantId().equals(role.getTenantId())) {
-                    throw new BizException(ResultCode.PARAM_ERROR, "角色不存在或不属于当前租户");
+                Role role = roleMap.get(roleId);
+                if (role == null || !targetTenantId.equals(role.getTenantId())) {
+                    throw new BizException(ResultCode.PARAM_ERROR, "角色不存在或不属于目标用户所在租户");
                 }
                 // 纵深防御：历史/手工数据若混入 admin 键角色，非平台管理员不得分配（否则直接提权）
                 if (RoleConstants.ROLE_ADMIN.equals(role.getRoleKey()) && !current.isAdmin()) {
@@ -200,17 +242,37 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
                 }
             }
         }
-        userRoleMapper.delete(new LambdaQueryWrapper<UserRole>().eq(UserRole::getUserId, existed.getId()));
+        // 全量替换用户在目标组织内的角色，保留组织属性（dept_id/position/is_default）
+        // 先读取现有记录的组织属性，避免角色变更时丢失
+        UserTenant existingUt = userTenantMapper.selectOne(new LambdaQueryWrapper<UserTenant>()
+                .eq(UserTenant::getUserId, existed.getId())
+                .eq(UserTenant::getTenantId, targetTenantId)
+                .last("LIMIT 1"));
+        Long preservedDeptId = existingUt != null ? existingUt.getDeptId() : existed.getDeptId();
+        String preservedPosition = existingUt != null ? existingUt.getPosition() : null;
+        int preservedIsDefault = existingUt != null && existingUt.getIsDefault() != null
+                ? existingUt.getIsDefault() : 1;
+
+        userTenantMapper.delete(new LambdaQueryWrapper<UserTenant>()
+                .eq(UserTenant::getUserId, existed.getId())
+                .eq(UserTenant::getTenantId, targetTenantId));
         if (roleIds != null) {
-            for (Long roleId : roleIds) {
-                UserRole ur = new UserRole();
-                ur.setUserId(existed.getId());
-                ur.setRoleId(roleId);
-                userRoleMapper.insert(ur);
+            for (int i = 0; i < roleIds.size(); i++) {
+                UserTenant ut = new UserTenant();
+                ut.setUserId(existed.getId());
+                ut.setTenantId(targetTenantId);
+                ut.setRoleId(roleIds.get(i));
+                ut.setDeptId(preservedDeptId);
+                ut.setPosition(preservedPosition);
+                // 多角色时只有第一个保留 is_default 标记
+                ut.setIsDefault(i == 0 ? preservedIsDefault : 0);
+                ut.setStatus(1);
+                userTenantMapper.insert(ut);
             }
         }
-        log.info("用户角色已分配: user={}, count={}, operator={}",
-                existed.getUsername(), roleIds == null ? 0 : roleIds.size(), current.getUsername());
+        log.info("用户角色已分配: user={}, tenant={}, count={}, operator={}",
+                existed.getUsername(), targetTenantId,
+                roleIds == null ? 0 : roleIds.size(), current.getUsername());
     }
 
     @Override
@@ -228,9 +290,12 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         baseMapper.updateById(existed);
     }
 
-    /** 部门归属校验：部门必须存在且属于当前租户（防跨租户引用脏化组织树） */
+    /** 部门归属校验：部门必须存在且属于当前租户（防跨租户引用脏化组织树）；平台管理员跳过校验 */
     private void checkDeptInTenant(LoginUser current, Long deptId) {
         if (deptId == null) {
+            return;
+        }
+        if (current.isAdmin()) {
             return;
         }
         Dept dept = deptMapper.selectById(deptId);
@@ -268,10 +333,16 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         }
     }
 
-    /** 租户内用户查询（越租户访问返回 404，防止信息泄漏） */
+    /** 租户内用户查询（越租户访问返回 404，防止信息泄漏）；平台管理员可操作任意租户用户 */
     private User selectInTenant(LoginUser current, String id) {
         User existed = baseMapper.selectById(id);
-        if (existed == null || !current.getTenantId().equals(existed.getTenantId())) {
+        if (existed == null) {
+            throw new BizException(ResultCode.NOT_FOUND, "用户不存在");
+        }
+        if (current.isAdmin()) {
+            return existed;
+        }
+        if (!current.getTenantId().equals(existed.getTenantId())) {
             throw new BizException(ResultCode.NOT_FOUND, "用户不存在");
         }
         return existed;

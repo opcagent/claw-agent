@@ -40,4 +40,7 @@ public class UserCreateRequest {
 
     /** 备注 */
     private String remark;
+
+    /** 职位 */
+    private String position;
 }

@@ -10,7 +10,7 @@ import lombok.EqualsAndHashCode;
  * 角色实体（表 sys_role）。
  * <p>
  * 数据权限五档（若依约定，见 data_scope）：
- * 1 全部 / 2 自定义（配合 sys_role_dept）/ 3 本部门 / 4 本部门及以下 / 5 仅本人。
+ * 1 全部 / 2 自定义 / 3 本部门 / 4 本部门及以下 / 5 仅本人。
  */
 @Data
 @EqualsAndHashCode(callSuper=false)

@@ -5,20 +5,10 @@ import com.baomidou.mybatisplus.extension.service.IService;
 import com.claw.agent.model.LoginLog;
 import com.claw.agent.security.LoginUser;
 
-import java.util.List;
-
 /**
  * 登录日志查询接口（写入由认证服务在登录/登出流程完成）。
  */
 public interface LoginLogService extends IService<LoginLog> {
-
-    /**
-     * 登录日志列表（按时间倒序）：平台管理员看全部，租户管理员看本租户。
-     *
-     * @param current 当前登录用户
-     * @return 日志列表
-     */
-    List<LoginLog> listLogs(LoginUser current);
 
     /**
      * 登录日志分页（按时间倒序）：平台管理员看全部，租户管理员看本租户，支持搜索与筛选。

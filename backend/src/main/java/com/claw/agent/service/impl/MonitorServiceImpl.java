@@ -35,11 +35,15 @@ public class MonitorServiceImpl implements MonitorService {
     private final UserMapper userMapper;
     private final TenantMapper tenantMapper;
 
+    /** 在线用户列表最大条数（防大规模场景下内存压力） */
+    private static final int MAX_ONLINE_USERS = 500;
+
     @Override
     public List<OnlineUserVO> listOnlineUsers(LoginUser viewer) {
         // 租户管理员只看本租户（与日志等管理接口的可见性一致）；快照无租户信息时不纳入租户视图
         List<OnlineUserTracker.Snapshot> snapshots = onlineUserTracker.listActive().stream()
                 .filter(s -> viewer.isAdmin() || Objects.equals(s.getTenantId(), viewer.getTenantId()))
+                .limit(MAX_ONLINE_USERS)
                 .toList();
         if (snapshots.isEmpty()) {
             return List.of();

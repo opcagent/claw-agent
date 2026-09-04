@@ -13,6 +13,8 @@ import com.claw.agent.model.dto.LoginRequest;
 import com.claw.agent.model.dto.LoginResponse;
 import com.claw.agent.model.dto.ProfileResponse;
 import com.claw.agent.model.dto.ProfileUpdateRequest;
+import com.claw.agent.model.dto.SwitchTenantRequest;
+import com.claw.agent.model.dto.TenantBrief;
 import com.claw.agent.service.AuthService;
 import jakarta.validation.Valid;
 import io.swagger.v3.oas.annotations.Operation;
@@ -50,7 +52,7 @@ public class AuthController {
     private final AuthService authService;
 
     /** 登录：校验账号密码，签发 JWT，下发角色与权限（匿名放行，登录日志含访问者 IP） */
-    @Operation(summary = "用户登录", description = "校验账号密码，签发 JWT，下发角色与权限")
+    @Operation(summary = "用户登录", description = "校验账号密码，签发 JWT，下发角色与权限。多组织用户返回组织列表待选择")
     @PostMapping("/login")
     @PreAuthorize("permitAll()")
     public Mono<Result<LoginResponse>> login(@Valid @RequestBody LoginRequest request) {
@@ -93,6 +95,13 @@ public class AuthController {
         return ReactiveSupport.call(authService::currentUserInfo);
     }
 
+    /** 当前用户可登录的组织列表（已登录用户切换组织时使用） */
+    @Operation(summary = "我的组织列表", description = "获取当前用户可登录的组织列表，用于组织切换")
+    @GetMapping("/myTenants")
+    public Mono<Result<List<TenantBrief>>> myTenants() {
+        return ReactiveSupport.call(authService::listMyTenants);
+    }
+
     /** 本人个人信息详情（基础资料 + 最近一次成功登录） */
     @Operation(summary = "个人信息详情", description = "获取本人基础资料与最近一次成功登录记录")
     @GetMapping("/profile")
@@ -121,5 +130,12 @@ public class AuthController {
     @PostMapping("/logout")
     public Mono<Result<Void>> logout() {
         return ReactiveSupport.run(authService::logout);
+    }
+
+    /** 切换组织：已登录用户切换到另一个已加入的组织，重新签发 JWT */
+    @Operation(summary = "切换组织", description = "已登录用户切换到另一个已加入的组织，重新签发 JWT")
+    @PostMapping("/switchTenant")
+    public Mono<Result<LoginResponse>> switchTenant(@Valid @RequestBody SwitchTenantRequest request) {
+        return ReactiveSupport.call(current -> authService.switchTenant(current, request));
     }
 }

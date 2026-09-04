@@ -7,6 +7,8 @@ import com.claw.agent.model.dto.LoginRequest;
 import com.claw.agent.model.dto.LoginResponse;
 import com.claw.agent.model.dto.ProfileResponse;
 import com.claw.agent.model.dto.ProfileUpdateRequest;
+import com.claw.agent.model.dto.SwitchTenantRequest;
+import com.claw.agent.model.dto.TenantBrief;
 import com.claw.agent.security.LoginUser;
 
 import java.util.List;
@@ -84,4 +86,25 @@ public interface AuthService {
      * @return 登录日志列表（含失败记录，便于发现异常登录）
      */
     List<LoginLog> myLoginLogs(LoginUser current, int limit);
+
+    /**
+     * 切换组织：已登录用户切换到另一个已加入的组织，重新签发 JWT。
+     * <p>
+     * 切换后当前活跃组织变更，工作区和配置按新组织解析。
+     *
+     * @param current 当前登录用户
+     * @param request 切换组织请求（目标租户ID）
+     * @return 登录响应（含新 token / 角色 / 权限）
+     */
+    LoginResponse switchTenant(LoginUser current, SwitchTenantRequest request);
+
+    /**
+     * 当前用户可登录的组织列表：已登录用户切换组织时，前端需要知道可选的组织。
+     * <p>
+     * 平台管理员（不属于任何组织）返回空列表。
+     *
+     * @param current 当前登录用户
+     * @return 组织简要列表（含角色键、是否默认）
+     */
+    List<TenantBrief> listMyTenants(LoginUser current);
 }

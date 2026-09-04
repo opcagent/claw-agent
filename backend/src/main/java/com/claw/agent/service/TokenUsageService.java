@@ -216,11 +216,13 @@ public class TokenUsageService {
      * @return Token 使用流水列表
      */
     public List<TokenUsageLog> getUsageLogs(String userId, Long tenantId, int limit) {
+        // 服务端限幅防拉全表
+        int safeLimit = Math.min(Math.max(limit, 1), 200);
         LambdaQueryWrapper<TokenUsageLog> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(TokenUsageLog::getUserId, userId)
                .eq(TokenUsageLog::getTenantId, tenantId)
                .orderByDesc(TokenUsageLog::getUsageTime)
-               .last("LIMIT " + limit);
+               .last("LIMIT " + safeLimit);
 
         return logMapper.selectList(wrapper);
     }
@@ -240,7 +242,8 @@ public class TokenUsageService {
         wrapper.eq(TokenUsageSummary::getTenantId, tenantId)
                .eq(TokenUsageSummary::getPeriodType, "monthly")
                .eq(TokenUsageSummary::getPeriodStart, periodStart)
-               .orderByDesc(TokenUsageSummary::getTotalTokens);
+               .orderByDesc(TokenUsageSummary::getTotalTokens)
+               .last("LIMIT 500"); // 大租户分页请使用分页接口
 
         return summaryMapper.selectList(wrapper);
     }

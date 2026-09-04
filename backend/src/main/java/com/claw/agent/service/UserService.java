@@ -111,4 +111,5 @@ public interface UserService extends IService<User> {
      * @param gender   性别（0/1/2，可空缺省 0）
      */
     void updateMyProfile(LoginUser current, String nickname, String phone, String email, Integer gender);
+
 }

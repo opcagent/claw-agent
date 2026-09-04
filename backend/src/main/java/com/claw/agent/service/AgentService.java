@@ -406,7 +406,7 @@ public class AgentService {
                         .eq(ChatMessage::getSessionId, sessionId)
                         .eq(ChatMessage::getUsername, user.getUsername())
                         .orderByAsc(ChatMessage::getId)
-                        .last("LIMIT 500"));
+                        .last("LIMIT 200"));
     }
 
     /**

@@ -68,6 +68,15 @@ export interface LoginResponse {
   permissions: string[];
 }
 
+/** 组织简要信息（myTenants 接口返回，供组织切换使用） */
+export interface TenantBrief {
+  tenantId: number;
+  tenantCode: string;
+  tenantName: string;
+  roleKeys: string[];
+  isDefault: boolean;
+}
+
 /** 个人信息详情（对应 dto/ProfileResponse.java） */
 export interface ProfileInfo {
   username: string;
@@ -318,6 +327,22 @@ export interface UserCreateRequest {
   gender?: number;
   deptId?: number | null;
   remark?: string | null;
+  /** 职位 */
+  position?: string | null;
+}
+
+/** 用户-组织关联（对应 model/UserTenant.java） */
+export interface UserTenant {
+  id?: number;
+  userId: string;
+  tenantId: number;
+  roleId: number;
+  deptId?: number | null;
+  /** 该组织内的职位 */
+  position?: string | null;
+  status: number;
+  isDefault: number;
+  createTime?: string;
 }
 
 /** 租户（对应 model/Tenant.java） */

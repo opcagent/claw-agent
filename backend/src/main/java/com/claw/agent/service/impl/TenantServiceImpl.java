@@ -11,14 +11,14 @@ import com.claw.agent.mapper.RoleMapper;
 import com.claw.agent.mapper.RoleMenuMapper;
 import com.claw.agent.mapper.TenantMapper;
 import com.claw.agent.mapper.UserMapper;
-import com.claw.agent.mapper.UserRoleMapper;
+import com.claw.agent.mapper.UserTenantMapper;
 import com.claw.agent.model.Dept;
 import com.claw.agent.model.Menu;
 import com.claw.agent.model.Role;
 import com.claw.agent.model.RoleMenu;
 import com.claw.agent.model.Tenant;
 import com.claw.agent.model.User;
-import com.claw.agent.model.UserRole;
+import com.claw.agent.model.UserTenant;
 import com.claw.agent.model.dto.SetAdminRequest;
 import com.claw.agent.model.dto.TenantCreateWithAdminRequest;
 import com.claw.agent.security.LoginUser;
@@ -52,7 +52,7 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, Tenant> impleme
     private final RoleMapper roleMapper;
     private final RoleMenuMapper roleMenuMapper;
     private final MenuMapper menuMapper;
-    private final UserRoleMapper userRoleMapper;
+    private final UserTenantMapper userTenantMapper;
     private final PasswordEncoder passwordEncoder;
 
     @Override
@@ -93,24 +93,10 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, Tenant> impleme
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public void deleteTenant(Long id) {
-        Long userCount = userMapper.selectCount(new LambdaQueryWrapper<User>()
-                .eq(User::getTenantId, id));
-        if (userCount != null && userCount > 0) {
-            throw new BizException(ResultCode.PARAM_ERROR, "租户下仍有用户，禁止删除");
-        }
-        // 同步清理组织骨架残留：角色-菜单授权 → 角色 → 部门（无用户则 user_role 必为空），避免删租户后脏数据滞留
-        List<Long> roleIds = roleMapper.selectList(new LambdaQueryWrapper<Role>()
-                        .eq(Role::getTenantId, id))
-                .stream().map(Role::getId).toList();
-        if (!roleIds.isEmpty()) {
-            roleMenuMapper.delete(new LambdaQueryWrapper<RoleMenu>().in(RoleMenu::getRoleId, roleIds));
-            roleMapper.delete(new LambdaQueryWrapper<Role>().eq(Role::getTenantId, id));
-        }
-        deptMapper.delete(new LambdaQueryWrapper<Dept>().eq(Dept::getTenantId, id));
-        baseMapper.deleteById(id);
-        log.info("租户已删除: id={}, 清理角色数={}", id, roleIds.size());
+        // 租户禁止物理删除：删除后该组织下所有用户/角色/部门/日志等关联数据全部丢失，不可恢复
+        // 如需停用租户，请通过修改接口将 status 置为 0（禁用）
+        throw new BizException(ResultCode.PARAM_ERROR, "租户不支持删除，可通过修改状态为禁用来停用");
     }
 
     @Override
@@ -137,12 +123,28 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, Tenant> impleme
             throw new BizException(ResultCode.NOT_FOUND, "租户管理员角色不存在，请先在角色管理中创建 tenant_admin 角色");
         }
 
-        // 4. 全量替换用户角色（仅保留 tenant_admin 角色）
-        userRoleMapper.delete(new LambdaQueryWrapper<UserRole>().eq(UserRole::getUserId, user.getId()));
-        UserRole userRole = new UserRole();
-        userRole.setUserId(user.getId());
-        userRole.setRoleId(adminRole.getId());
-        userRoleMapper.insert(userRole);
+        // 4. 全量替换用户在该组织内的角色（仅保留 tenant_admin 角色），保留组织属性
+        // 先读取现有记录的组织属性（dept_id/position），避免角色变更时丢失
+        UserTenant existingUt = userTenantMapper.selectOne(new LambdaQueryWrapper<UserTenant>()
+                .eq(UserTenant::getUserId, user.getId())
+                .eq(UserTenant::getTenantId, tenantId)
+                .last("LIMIT 1"));
+        Long preservedDeptId = existingUt != null && existingUt.getDeptId() != null
+                ? existingUt.getDeptId() : user.getDeptId();
+        String preservedPosition = existingUt != null ? existingUt.getPosition() : null;
+
+        userTenantMapper.delete(new LambdaQueryWrapper<UserTenant>()
+                .eq(UserTenant::getUserId, user.getId())
+                .eq(UserTenant::getTenantId, tenantId));
+        UserTenant ut = new UserTenant();
+        ut.setUserId(user.getId());
+        ut.setTenantId(tenantId);
+        ut.setRoleId(adminRole.getId());
+        ut.setDeptId(preservedDeptId);
+        ut.setPosition(preservedPosition);
+        ut.setStatus(1);
+        ut.setIsDefault(1);
+        userTenantMapper.insert(ut);
 
         log.info("租户管理员已设置: tenant={}, user={}, operator={}",
                 tenant.getTenantName(), user.getUsername(), current.getUsername());
@@ -192,7 +194,7 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, Tenant> impleme
                 throw new BizException(ResultCode.NOT_FOUND, "租户管理员角色不存在");
             }
 
-            // 创建管理员用户
+            // 创建管理员用户并建立组织关联
             User adminUser = new User();
             adminUser.setTenantId(tenant.getId());
             adminUser.setUsername(request.getAdminUsername().trim());
@@ -202,13 +204,19 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, Tenant> impleme
             adminUser.setEmail(request.getAdminEmail());
             adminUser.setGender(request.getAdminGender() == null ? 0 : request.getAdminGender());
             adminUser.setStatus(1);
+            // 生成规则ID：租户编码_自增序号（与 UserServiceImpl 保持一致）
+            String tenantCode = request.getTenantCode();
+            adminUser.setId(tenantCode + "_1");
             userMapper.insert(adminUser);
 
-            // 分配 tenant_admin 角色
-            UserRole userRole = new UserRole();
-            userRole.setUserId(adminUser.getId());
-            userRole.setRoleId(adminRole.getId());
-            userRoleMapper.insert(userRole);
+            // 创建 sys_user_tenant 关联（分配 tenant_admin 角色）
+            UserTenant ut = new UserTenant();
+            ut.setUserId(adminUser.getId());
+            ut.setTenantId(tenant.getId());
+            ut.setRoleId(adminRole.getId());
+            ut.setStatus(1);
+            ut.setIsDefault(1);
+            userTenantMapper.insert(ut);
 
             log.info("租户及初始管理员已创建: tenant={}, adminUser={}, operator={}",
                     tenant.getTenantName(), adminUser.getUsername(), current.getUsername());

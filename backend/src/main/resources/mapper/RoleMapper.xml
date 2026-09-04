@@ -4,6 +4,7 @@
 <!--
   角色表自定义 SQL 映射。
   BaseMapper 内置 CRUD 由 MyBatis Plus 自动生成，此处仅放联表等自定义查询。
+  角色查询链路已从 sys_user_role 切换到 sys_user_tenant（多组织兼容）。
 -->
 <mapper namespace="com.claw.agent.mapper.RoleMapper">
 
@@ -21,13 +22,27 @@
         <result column="update_time" property="updateTime"/>
     </resultMap>
 
-    <!-- 查询用户的全部启用角色（经 sys_user_role 关联），供登录时写入 JWT -->
+    <!-- 查询用户的全部启用角色（经 sys_user_tenant 关联），供登录时写入 JWT -->
     <select id="selectRolesByUserId" resultMap="roleResultMap">
+        SELECT DISTINCT r.id, r.tenant_id, r.role_name, r.role_key, r.role_sort,
+               r.data_scope, r.status, r.remark, r.create_time, r.update_time
+        FROM sys_role r
+                 INNER JOIN sys_user_tenant ut ON ut.role_id = r.id
+        WHERE ut.user_id = #{userId}
+          AND ut.status = 1
+          AND r.status = 1
+        ORDER BY r.role_sort
+    </select>
+
+    <!-- 查询用户在指定组织内的启用角色（经 sys_user_tenant 关联） -->
+    <select id="selectRolesByUserIdAndTenantId" resultMap="roleResultMap">
         SELECT r.id, r.tenant_id, r.role_name, r.role_key, r.role_sort,
                r.data_scope, r.status, r.remark, r.create_time, r.update_time
         FROM sys_role r
-                 INNER JOIN sys_user_role ur ON ur.role_id = r.id
-        WHERE ur.user_id = #{userId}
+                 INNER JOIN sys_user_tenant ut ON ut.role_id = r.id
+        WHERE ut.user_id = #{userId}
+          AND ut.tenant_id = #{tenantId}
+          AND ut.status = 1
           AND r.status = 1
         ORDER BY r.role_sort
     </select>

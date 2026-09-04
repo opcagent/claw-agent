@@ -31,9 +31,13 @@ public class DeptServiceImpl extends ServiceImpl<DeptMapper, Dept> implements De
 
     @Override
     public List<Dept> listDepts(LoginUser current) {
-        return baseMapper.selectList(new LambdaQueryWrapper<Dept>()
-                .eq(Dept::getTenantId, current.getTenantId())
-                .orderByAsc(Dept::getOrderNum));
+        LambdaQueryWrapper<Dept> wrapper = new LambdaQueryWrapper<Dept>()
+                .orderByAsc(Dept::getOrderNum);
+        // 平台管理员跨租户查看全部部门，租户管理员只看本租户
+        if (!current.isAdmin()) {
+            wrapper.eq(Dept::getTenantId, current.getTenantId());
+        }
+        return baseMapper.selectList(wrapper);
     }
 
     @Override
@@ -88,7 +92,7 @@ public class DeptServiceImpl extends ServiceImpl<DeptMapper, Dept> implements De
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void deleteDept(LoginUser current, Long id) {
-        selectInTenant(current, id);
+        Dept existed = selectInTenant(current, id);
         Long childCount = baseMapper.selectCount(new LambdaQueryWrapper<Dept>()
                 .eq(Dept::getTenantId, current.getTenantId())
                 .eq(Dept::getParentId, id));
@@ -137,10 +141,16 @@ public class DeptServiceImpl extends ServiceImpl<DeptMapper, Dept> implements De
         return false;
     }
 
-    /** 租户内部门查询（越租户访问返回 404，防信息泄漏） */
+    /** 租户内部门查询（越租户访问返回 404，防信息泄漏）；平台管理员可操作任意租户部门 */
     private Dept selectInTenant(LoginUser current, Long id) {
         Dept existed = baseMapper.selectById(id);
-        if (existed == null || !current.getTenantId().equals(existed.getTenantId())) {
+        if (existed == null) {
+            throw new BizException(ResultCode.NOT_FOUND, "部门不存在");
+        }
+        if (current.isAdmin()) {
+            return existed;
+        }
+        if (!current.getTenantId().equals(existed.getTenantId())) {
             throw new BizException(ResultCode.NOT_FOUND, "部门不存在");
         }
         return existed;
