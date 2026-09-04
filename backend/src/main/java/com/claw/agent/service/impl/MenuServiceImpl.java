@@ -153,16 +153,19 @@ public class MenuServiceImpl extends ServiceImpl<MenuMapper, Menu> implements Me
                 }
             }
         }
-        // 仅删除本租户角色与该菜单的关联，不影响其他租户
+        // 批量删除本租户角色与该菜单的关联（避免循环逐条删除）
         List<RoleMenu> existedRelations = roleMenuMapper.selectList(new LambdaQueryWrapper<RoleMenu>()
                 .eq(RoleMenu::getMenuId, menuId));
-        for (RoleMenu rm : existedRelations) {
-            if (tenantRoleIds.contains(rm.getRoleId())) {
-                roleMenuMapper.delete(new LambdaQueryWrapper<RoleMenu>()
-                        .eq(RoleMenu::getMenuId, menuId)
-                        .eq(RoleMenu::getRoleId, rm.getRoleId()));
-            }
+        List<Long> roleIdsToDelete = existedRelations.stream()
+                .filter(rm -> tenantRoleIds.contains(rm.getRoleId()))
+                .map(RoleMenu::getRoleId)
+                .toList();
+        if (!roleIdsToDelete.isEmpty()) {
+            roleMenuMapper.delete(new LambdaQueryWrapper<RoleMenu>()
+                    .eq(RoleMenu::getMenuId, menuId)
+                    .in(RoleMenu::getRoleId, roleIdsToDelete));
         }
+        // 批量插入新关联
         if (roleIds != null) {
             for (Long roleId : roleIds) {
                 RoleMenu rm = new RoleMenu();

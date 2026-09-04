@@ -512,10 +512,6 @@ public class CapabilityService {
                 .isNull(ownerId == null, SkillConfig::getOwnerId);
     }
 
-    private List<McpServer> selectServers(String scope, Long tenantId, String ownerId) {
-        return mcpServerMapper.selectList(serverWrapper(scope, tenantId, ownerId));
-    }
-
     /** 实体转换为 Harness MCP 配置（敏感字段解密、JSON 字段解析，解析失败仅告警） */
     private McpServerConfig toHarnessConfig(McpServer server) {
         McpServerConfig config = new McpServerConfig();

@@ -13,6 +13,8 @@ import {
   Bell,
   BookOpen,
   Building2,
+  Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   CircleUserRound,
@@ -44,7 +46,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
-import type { SysMenu, VersionInfo } from "@/lib/types";
+import type { SysMenu, TenantBrief, VersionInfo } from "@/lib/types";
 
 /** 通知已读标记的 localStorage 键（存已读版本号，版本变更即重新亮红点） */
 const NOTICE_READ_KEY = "claw_notice_read";
@@ -79,12 +81,16 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
+  const switchTenant = useAuthStore((s) => s.switchTenant);
 
   const [menus, setMenus] = useState<SysMenu[]>([]);
   const [pwdOpen, setPwdOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   // 侧边栏折叠状态
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  // 组织切换：当前用户所属组织列表
+  const [myTenants, setMyTenants] = useState<TenantBrief[]>([]);
 
   // 通知中心：平台版本信息（发布说明随部署配置维护）
   const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
@@ -102,6 +108,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     api
       .get<VersionInfo>("/api/config/versionInfo")
       .then((res) => setVersionInfo(res.data || null))
+      .catch(() => {});
+    // 拉取当前用户所属组织列表（用于组织切换，失败静默）
+    api
+      .get<TenantBrief[]>("/api/auth/myTenants")
+      .then((res) => setMyTenants(res.data || []))
       .catch(() => {});
     setReadVersion(window.localStorage.getItem(NOTICE_READ_KEY));
   }, []);
@@ -235,6 +246,43 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               </div>
             </DropdownMenuContent>
           </DropdownMenu>
+          {/* 组织切换器：直接暴露在顶栏，一键切换 */}
+          {myTenants.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger className="flex shrink-0 items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-medium text-slate-600 transition-all duration-200 hover:bg-slate-100 hover:text-slate-900">
+                <Building2 className="h-4 w-4 text-slate-400" />
+                <span className="max-w-28 truncate">{user?.tenantName || "当前组织"}</span>
+                <ChevronDown className="h-3 w-3 text-slate-400" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <div className="px-2 py-1.5">
+                  <div className="mb-1 text-xs font-medium text-slate-400">切换组织</div>
+                  <div className="space-y-0.5">
+                    {myTenants.map((t) => (
+                      <button
+                        key={t.tenantId}
+                        onClick={() => {
+                          if (t.tenantId !== user?.tenantId) {
+                            switchTenant(t.tenantId);
+                          }
+                        }}
+                        className={
+                          "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors " +
+                          (t.tenantId === user?.tenantId
+                            ? "bg-indigo-50 font-medium text-indigo-600"
+                            : "text-slate-700 hover:bg-slate-100")
+                        }
+                      >
+                        <Building2 className="h-3.5 w-3.5 shrink-0" />
+                        <span className="truncate flex-1">{t.tenantName}</span>
+                        {t.tenantId === user?.tenantId && <Check className="h-3.5 w-3.5 shrink-0" />}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
           <DropdownMenu>
             <DropdownMenuTrigger className="flex items-center gap-2 rounded-full border border-slate-200 bg-white py-1 pl-1 pr-3 shadow-sm transition-colors hover:bg-slate-50">
               <Avatar className="h-7 w-7">
@@ -246,21 +294,46 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 {user?.nickname || user?.username}
               </span>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem disabled className="text-xs text-muted-foreground">
-                {/* 展示租户名称而非 ID，旧缓存无名称时降级显示 ID */}
-                租户：{user?.tenantName || `#${user?.tenantId}`} ｜ 角色：{user?.roles?.join(", ")}
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => setProfileOpen(true)}>
-                <CircleUserRound className="mr-2 h-4 w-4" /> 个人信息
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setPwdOpen(true)}>
-                <KeyRound className="mr-2 h-4 w-4" /> 修改密码
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={logout}>
-                <LogOut className="mr-2 h-4 w-4" /> 退出登录
-              </DropdownMenuItem>
+            <DropdownMenuContent align="end" className="w-56">
+              {/* 用户信息头部 */}
+              <div className="border-b px-3 py-2.5">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-slate-800">
+                    {user?.nickname || user?.username}
+                  </span>
+                  {user?.roles?.map((r) => (
+                    <span
+                      key={r}
+                      className={
+                        "rounded-full px-2 py-0.5 text-[11px] font-medium " +
+                        (r === "admin"
+                          ? "bg-amber-100 text-amber-700"
+                          : r === "tenant_admin"
+                            ? "bg-indigo-100 text-indigo-700"
+                            : "bg-slate-100 text-slate-600")
+                      }
+                    >
+                      {r === "admin" ? "平台管理员" : r === "tenant_admin" ? "租户管理员" : r}
+                    </span>
+                  ))}
+                </div>
+                <p className="mt-1 text-xs text-slate-400">
+                  {user?.tenantName || `租户 #${user?.tenantId}`}
+                </p>
+              </div>
+              <div className="py-1">
+                <DropdownMenuItem onClick={() => setProfileOpen(true)}>
+                  <CircleUserRound className="mr-2 h-4 w-4" /> 个人信息
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setPwdOpen(true)}>
+                  <KeyRound className="mr-2 h-4 w-4" /> 修改密码
+                </DropdownMenuItem>
+              </div>
+              <div className="border-t py-1">
+                <DropdownMenuItem onClick={logout} className="text-rose-600 focus:text-rose-600">
+                  <LogOut className="mr-2 h-4 w-4" /> 退出登录
+                </DropdownMenuItem>
+              </div>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>

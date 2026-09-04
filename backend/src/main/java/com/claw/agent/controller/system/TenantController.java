@@ -76,8 +76,8 @@ public class TenantController {
                 u -> tenantService.updateTenant(id, tenant));
     }
 
-    /** 删除租户 */
-    @Operation(summary = "删除租户", description = "删除指定租户")
+    /** 删除租户（已禁用：仅支持通过修改接口将 status 置为 0 来停用） */
+    @Operation(summary = "删除租户", description = "已禁用：租户不支持删除，请通过修改接口将 status 置为 0 来停用")
     @DeleteMapping("/{id}")
     public Mono<Result<Void>> delete(@PathVariable Long id) {
         return ReactiveSupport.run(MODULE, OperType.DELETE, "删除租户",

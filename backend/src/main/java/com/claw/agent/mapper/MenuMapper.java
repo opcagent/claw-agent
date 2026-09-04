@@ -10,26 +10,29 @@ import java.util.List;
  * 菜单/权限数据访问层。
  * <p>
  * 提供按用户聚合权限标识（perms）的三级联表查询：
- * sys_user_role -> sys_role_menu -> sys_menu，
+ * sys_user_tenant -> sys_role_menu -> sys_menu，
  * 登录后下发前端用于按钮级显隐控制。
  */
 public interface MenuMapper extends BaseMapper<Menu> {
 
     /**
-     * 查询用户的全部启用权限标识（如 system:user:add）。
-     * <p>
-     * 平台管理员角色（role_key=admin）视为拥有全部权限，由 service 层短路处理。
+     * 查询用户在指定组织内的权限标识。
      *
-     * @param userId 用户ID
-     * @return 权限标识列表（去重由 SQL DISTINCT 保证）
+     * @param userId   用户ID
+     * @param tenantId 组织ID
+     * @return 权限标识列表（去重）
      */
-    List<String> selectPermsByUserId(@Param("userId") String userId);
+    List<String> selectPermsByUserIdAndTenantId(@Param("userId") String userId,
+                                                 @Param("tenantId") Long tenantId);
 
     /**
-     * 查询用户可见的菜单（目录/菜单，不含按钮），用于登录后构建前端路由。
+     * 查询用户在指定组织内可见的菜单（目录/菜单，不含按钮）。
+     * <p>多角色场景下仅返回当前活跃组织的菜单，避免跨组织菜单泄露。
      *
-     * @param userId 用户ID
+     * @param userId   用户ID
+     * @param tenantId 组织ID
      * @return 菜单列表（按显示顺序）
      */
-    List<Menu> selectMenusByUserId(@Param("userId") String userId);
+    List<Menu> selectMenusByUserIdAndTenantId(@Param("userId") String userId,
+                                               @Param("tenantId") Long tenantId);
 }

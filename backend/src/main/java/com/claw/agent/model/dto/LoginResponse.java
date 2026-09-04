@@ -9,6 +9,7 @@ import java.util.List;
  * 登录响应 DTO：token + 用户基础信息 + 角色键 + 权限标识列表。
  * <p>
  * 权限列表（如 system:user:add）下发前端，用于菜单/按钮级显隐控制（若依模式）。
+ * 多组织场景下登录时自动选择 is_default=1 的默认组织，无需前端干预。
  */
 @Data
 @Builder
@@ -23,7 +24,7 @@ public class LoginResponse {
     /** 昵称 */
     private String nickname;
 
-    /** 所属租户ID */
+    /** 所属租户ID（当前活跃组织） */
     private Long tenantId;
 
     /** 所属租户名称（展示用，租户不存在时为空） */

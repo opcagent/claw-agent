@@ -55,6 +55,7 @@ common      → Result / ResultCode / BizException / 全局异常处理器
 ## 6. 接口规约
 
 - REST 路径：`/api/<模块>/<动作>`，例如 `/api/auth/login`、`/api/chat/stream`；
+- **REST 路径命名（强制 camelCase）**：路径段必须使用驼峰命名（camelCase），禁止使用连字符（kebab-case）。新增接口必须遵守，历史遗留接口逐步迁移。示例：✅ `/api/auth/selectTenant`、`/api/config/paramKeys`；❌ `/api/auth/select-tenant`、`/api/config/param-keys`；
 - **响应式返回类型（强制）**：项目基于 WebFlux，所有控制器方法必须返回响应式类型 `Mono<Result<T>>` 或 `Flux<Result<T>>`，禁止直接返回阻塞类型 `Result<T>`（Spring Security 响应式拦截器会断言失败抛 `IllegalStateException`）；SSE 接口返回 `Flux<ServerSentEvent<String>>`；
 - 需要登录的阻塞式接口一律用 `common.ReactiveSupport.call/run`（查询用 `call`，增删改用带模块/操作类型/描述的重载 `call/run` 并自动记操作日志），禁止手写 `SecurityUtil.currentUser().flatMap(... Mono.fromCallable ... subscribeOn ...)` 样板；禁止使用 `@AuthenticationPrincipal` 注解获取用户（应从 `ReactiveSupport.call` 的 lambda 参数获取）；放行接口（登录/注册）才允许裸 `Mono.fromCallable(...).subscribeOn(boundedElastic)`；
 - 不需要登录的接口（如工具集查询）用 `Mono.fromCallable(() -> Result.ok(...)).subscribeOn(Schedulers.boundedElastic())` 包装，确保不阻塞事件循环；

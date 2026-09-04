@@ -5,20 +5,10 @@ import com.baomidou.mybatisplus.extension.service.IService;
 import com.claw.agent.model.OperLog;
 import com.claw.agent.security.LoginUser;
 
-import java.util.List;
-
 /**
  * 业务操作日志查询接口（写入由 {@code ReactiveSupport} 统一完成）。
  */
 public interface OperLogService extends IService<OperLog> {
-
-    /**
-     * 操作日志列表（按时间倒序）：平台管理员看全部，租户管理员看本租户。
-     *
-     * @param current 当前登录用户
-     * @return 日志列表
-     */
-    List<OperLog> listLogs(LoginUser current);
 
     /**
      * 操作日志分页（按时间倒序）：平台管理员看全部，租户管理员看本租户，支持搜索与筛选。

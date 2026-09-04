@@ -11,30 +11,14 @@ import com.claw.agent.service.LoginLogService;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
-import java.util.List;
-
 /**
  * 登录日志查询实现。
  */
 @Service
 public class LoginLogServiceImpl extends ServiceImpl<LoginLogMapper, LoginLog> implements LoginLogService {
 
-    /** 列表最大返回条数（防全表拉取） */
-    private static final int LIST_LIMIT = 500;
-
     /** 分页单页条数上限 */
     private static final long MAX_PAGE_SIZE = 100;
-
-    @Override
-    public List<LoginLog> listLogs(LoginUser current) {
-        LambdaQueryWrapper<LoginLog> wrapper = new LambdaQueryWrapper<>();
-        // 平台管理员看全部，租户管理员只看本租户
-        if (!current.isAdmin()) {
-            wrapper.eq(LoginLog::getTenantId, current.getTenantId());
-        }
-        wrapper.orderByDesc(LoginLog::getId).last("LIMIT " + LIST_LIMIT);
-        return baseMapper.selectList(wrapper);
-    }
 
     @Override
     public IPage<LoginLog> pageLogs(LoginUser current, long pageNum, long pageSize,

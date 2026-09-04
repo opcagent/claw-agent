@@ -12,20 +12,25 @@ import com.claw.agent.mapper.MenuMapper;
 import com.claw.agent.mapper.RoleMapper;
 import com.claw.agent.mapper.TenantMapper;
 import com.claw.agent.mapper.UserMapper;
+import com.claw.agent.mapper.UserTenantMapper;
 import com.claw.agent.model.LoginLog;
 import com.claw.agent.model.Menu;
 import com.claw.agent.model.Role;
 import com.claw.agent.model.Tenant;
 import com.claw.agent.model.User;
+import com.claw.agent.model.UserTenant;
 import com.claw.agent.model.dto.ChangePasswordRequest;
 import com.claw.agent.model.dto.LoginRequest;
 import com.claw.agent.model.dto.LoginResponse;
 import com.claw.agent.model.dto.ProfileResponse;
 import com.claw.agent.model.dto.ProfileUpdateRequest;
+import com.claw.agent.model.dto.SwitchTenantRequest;
+import com.claw.agent.model.dto.TenantBrief;
 import com.claw.agent.security.JwtUtil;
 import com.claw.agent.security.LoginRateLimiter;
 import com.claw.agent.security.LoginUser;
 import com.claw.agent.service.AuthService;
+import com.claw.agent.service.MenuService;
 import com.claw.agent.service.UserService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -36,12 +41,15 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 认证业务实现：登录 / 修改密码 / 登出 / 当前用户信息。
  * <p>
- * RBAC：登录时经 sys_user_role + sys_role 聚合角色键写入 JWT，
+ * RBAC：登录时经 sys_user_tenant + sys_role 聚合角色键写入 JWT，
  * 权限标识（perms）经三级联表聚合后随登录响应下发前端；
  * 登录成功失败与登出事件统一写入 {@code sys_login_log}。
  * 账号由管理员在用户管理中创建，不提供自助注册。
@@ -54,8 +62,10 @@ public class AuthServiceImpl implements AuthService {
     private final UserMapper userMapper;
     private final RoleMapper roleMapper;
     private final MenuMapper menuMapper;
+    private final MenuService menuService;
     private final LoginLogMapper loginLogMapper;
     private final TenantMapper tenantMapper;
+    private final UserTenantMapper userTenantMapper;
     private final PasswordEncoder passwordEncoder;
     private final JwtUtil jwtUtil;
     private final UserService userService;
@@ -78,25 +88,47 @@ public class AuthServiceImpl implements AuthService {
             recordLoginLog(user.getUsername(), user.getTenantId(), LoginLog.TYPE_LOGIN, 0, "账号已禁用");
             throw new BizException(ResultCode.USER_DISABLED);
         }
-        List<Role> roles = roleMapper.selectRolesByUserId(user.getId());
-        List<String> roleKeys = roles.stream().map(Role::getRoleKey).toList();
-        List<String> permissions = roleKeys.contains(RoleConstants.ROLE_ADMIN)
-                ? List.of(RoleConstants.ALL_PERMISSIONS)
-                : menuMapper.selectPermsByUserId(user.getId());
-        String token = jwtUtil.generateToken(user.getId(), user.getUsername(), user.getTenantId(), roleKeys, permissions);
+
+        // 平台管理员特殊处理：不属于任何组织，直接签发 JWT（admin 角色 + 全权限）
+        if (RoleConstants.PLATFORM_ADMIN_USERNAME.equals(user.getUsername())) {
+            LoginResponse response = buildPlatformAdminLoginResponse(user);
+            loginRateLimiter.clear(user.getUsername(), clientIp);
+            recordLoginLog(user.getUsername(), null, LoginLog.TYPE_LOGIN, 1, "平台管理员登录成功");
+            log.info("平台管理员登录: {}", user.getUsername());
+            return response;
+        }
+
+        // 多组织兼容：查询用户加入的所有组织（同一组织可能有多个角色记录）
+        List<UserTenant> userTenants = userTenantMapper.selectList(new LambdaQueryWrapper<UserTenant>()
+                .eq(UserTenant::getUserId, user.getId())
+                .eq(UserTenant::getStatus, 1));
+
+        // 按 tenantId 分组去重：同一组织多角色只算一个组织
+        Map<Long, List<UserTenant>> tenantGroups = new LinkedHashMap<>();
+        for (UserTenant ut : userTenants) {
+            tenantGroups.computeIfAbsent(ut.getTenantId(), k -> new ArrayList<>()).add(ut);
+        }
+
+        // 确定当前活跃组织：多组织时取 is_default=1 的默认组织，无默认则取第一个
+        Long activeTenantId;
+        if (tenantGroups.size() > 1) {
+            activeTenantId = tenantGroups.entrySet().stream()
+                    .filter(e -> e.getValue().stream().anyMatch(ut -> ut.getIsDefault() != null && ut.getIsDefault() == 1))
+                    .map(Map.Entry::getKey)
+                    .findFirst()
+                    .orElse(tenantGroups.keySet().iterator().next());
+            log.info("用户属于多个组织，自动选择默认组织: user={}, tenant={}", user.getUsername(), activeTenantId);
+        } else {
+            // 单组织或无 user_tenant 记录：兼容存量数据
+            activeTenantId = tenantGroups.size() == 1
+                    ? tenantGroups.keySet().iterator().next() : user.getTenantId();
+        }
+        LoginResponse response = buildLoginResponse(user, activeTenantId);
         // 登录成功清零失败计数（同维度历史失败不再影响后续登录）
         loginRateLimiter.clear(user.getUsername(), clientIp);
-        recordLoginLog(user.getUsername(), user.getTenantId(), LoginLog.TYPE_LOGIN, 1, "登录成功");
-        log.info("用户登录成功: {}", user.getUsername());
-        return LoginResponse.builder()
-                .token(token)
-                .username(user.getUsername())
-                .nickname(user.getNickname())
-                .tenantId(user.getTenantId())
-                .tenantName(selectTenantName(user.getTenantId()))
-                .roles(roleKeys)
-                .permissions(permissions)
-                .build();
+        recordLoginLog(user.getUsername(), activeTenantId, LoginLog.TYPE_LOGIN, 1, "登录成功");
+        log.info("用户登录成功: user={}, tenant={}", user.getUsername(), activeTenantId);
+        return response;
     }
 
     @Override
@@ -126,11 +158,14 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     public LoginResponse currentUserInfo(LoginUser current) {
-        String userId = selectUserId(current.getUsername());
-        // 账号被删除后 JWT 未到期仍可调用：空权限处理，避免 null 主键进联表查询
+        // 直接使用 JWT 中的 userId，避免冗余查库
+        String userId = current.getUserId();
+        // 账号被删除后 JWT 未到期仍可调用：空权限处理，避免 null 主键进联表查询；
+        // 多角色场景下只返回当前活跃组织的权限，避免跨组织权限泄露
         List<String> permissions = current.isAdmin()
                 ? List.of(RoleConstants.ALL_PERMISSIONS)
-                : (userId == null ? List.of() : menuMapper.selectPermsByUserId(userId));
+                : (userId == null ? List.of()
+                        : menuMapper.selectPermsByUserIdAndTenantId(userId, current.getTenantId()));
         return LoginResponse.builder()
                 .username(current.getUsername())
                 .tenantId(current.getTenantId())
@@ -138,6 +173,143 @@ public class AuthServiceImpl implements AuthService {
                 .roles(current.getRoleKeys())
                 .permissions(permissions)
                 .build();
+    }
+
+    @Override
+    public LoginResponse switchTenant(LoginUser current, SwitchTenantRequest request) {
+        // 1. 校验用户属于目标组织
+        UserTenant ut = userTenantMapper.selectOne(new LambdaQueryWrapper<UserTenant>()
+                .eq(UserTenant::getUserId, current.getUserId())
+                .eq(UserTenant::getTenantId, request.getTenantId())
+                .eq(UserTenant::getStatus, 1)
+                .last("LIMIT 1"));
+        if (ut == null) {
+            throw new BizException(ResultCode.FORBIDDEN, "您不属于该组织或已被禁用");
+        }
+
+        // 2. 更新 sys_user.tenant_id 为当前活跃组织
+        User user = userMapper.selectById(current.getUserId());
+        if (user == null) {
+            throw new BizException(ResultCode.NOT_FOUND, "用户不存在");
+        }
+        if (!request.getTenantId().equals(user.getTenantId())) {
+            user.setTenantId(request.getTenantId());
+            userMapper.updateById(user);
+        }
+
+        // 3. 重新签发 JWT
+        LoginResponse response = buildLoginResponse(user, request.getTenantId());
+        log.info("用户切换组织: user={}, from={}, to={}",
+                current.getUsername(), current.getTenantId(), request.getTenantId());
+        return response;
+    }
+
+    @Override
+    public List<TenantBrief> listMyTenants(LoginUser current) {
+        // 平台管理员不属于任何组织，直接返回空列表
+        if (current.isAdmin()) {
+            return List.of();
+        }
+        // 直接使用 JWT 中的 userId，避免冗余查库
+        String userId = current.getUserId();
+        if (userId == null) {
+            return List.of();
+        }
+        List<UserTenant> userTenants = userTenantMapper.selectList(new LambdaQueryWrapper<UserTenant>()
+                .eq(UserTenant::getUserId, userId)
+                .eq(UserTenant::getStatus, 1));
+        // 按 tenantId 分组去重：同一组织多角色只生成一个 brief
+        Map<Long, List<UserTenant>> tenantGroups = new LinkedHashMap<>();
+        for (UserTenant ut : userTenants) {
+            tenantGroups.computeIfAbsent(ut.getTenantId(), k -> new ArrayList<>()).add(ut);
+        }
+        return buildTenantBriefs(userId, tenantGroups);
+    }
+
+    /**
+     * 构建指定组织下的登录响应（聚合角色/权限/签发 JWT）。
+     *
+     * @param user       用户实体
+     * @param tenantId   目标组织ID
+     * @return 完整登录响应
+     */
+    private LoginResponse buildLoginResponse(User user, Long tenantId) {
+        // 查询用户在目标组织内的角色（角色按租户隔离）
+        List<Role> roles = roleMapper.selectRolesByUserIdAndTenantId(user.getId(), tenantId);
+        List<String> roleKeys = roles.stream().map(Role::getRoleKey).toList();
+        List<String> permissions = roleKeys.contains(RoleConstants.ROLE_ADMIN)
+                ? List.of(RoleConstants.ALL_PERMISSIONS)
+                : menuMapper.selectPermsByUserIdAndTenantId(user.getId(), tenantId);
+        String token = jwtUtil.generateToken(user.getId(), user.getUsername(), tenantId, roleKeys, permissions);
+        return LoginResponse.builder()
+                .token(token)
+                .username(user.getUsername())
+                .nickname(user.getNickname())
+                .tenantId(tenantId)
+                .tenantName(selectTenantName(tenantId))
+                .roles(roleKeys)
+                .permissions(permissions)
+                .build();
+    }
+
+    /**
+     * 构建平台管理员登录响应（不属于任何组织，直接授予 admin 角色 + 全权限）。
+     *
+     * @param user 平台管理员用户实体
+     * @return 登录响应
+     */
+    private LoginResponse buildPlatformAdminLoginResponse(User user) {
+        List<String> roleKeys = List.of(RoleConstants.ROLE_ADMIN);
+        List<String> permissions = List.of(RoleConstants.ALL_PERMISSIONS);
+        String token = jwtUtil.generateToken(user.getId(), user.getUsername(), 0L, roleKeys, permissions);
+        return LoginResponse.builder()
+                .token(token)
+                .username(user.getUsername())
+                .nickname(user.getNickname())
+                .tenantId(0L)
+                .tenantName("平台管理")
+                .roles(roleKeys)
+                .permissions(permissions)
+                .build();
+    }
+
+    /**
+     * 构建用户可登录的组织简要列表（按组织分组，聚合每个组织内的所有角色键）。
+     * <p>同一用户在同一组织可能有多个角色（多角色场景），需聚合去重后只生成一个 brief。
+     *
+     * @param userId       用户ID
+     * @param tenantGroups 按 tenantId 分组的组织关联记录
+     * @return 组织简要列表（每个组织一条）
+     */
+    private List<TenantBrief> buildTenantBriefs(String userId, Map<Long, List<UserTenant>> tenantGroups) {
+        // 批量查询所有租户（避免循环内逐条 selectById）
+        List<Tenant> tenants = tenantMapper.selectBatchIds(tenantGroups.keySet());
+        Map<Long, Tenant> tenantMap = tenants.stream()
+                .collect(java.util.stream.Collectors.toMap(Tenant::getId, t -> t, (a, b) -> a));
+
+        List<TenantBrief> briefs = new ArrayList<>();
+        for (Map.Entry<Long, List<UserTenant>> entry : tenantGroups.entrySet()) {
+            Long tenantId = entry.getKey();
+            List<UserTenant> uts = entry.getValue();
+            Tenant tenant = tenantMap.get(tenantId);
+            // 租户不存在或已禁用则跳过：禁用租户不可登录也不可切换
+            if (tenant == null || tenant.getStatus() == null || tenant.getStatus() != 1) {
+                continue;
+            }
+            // 查询用户在该组织内的所有角色（按组织隔离）
+            List<Role> roles = roleMapper.selectRolesByUserIdAndTenantId(userId, tenantId);
+            List<String> roleKeys = roles.stream().map(Role::getRoleKey).toList();
+            // isDefault 取该组织内任意一条记录（通常只有第一条为 1）
+            boolean isDefault = uts.stream().anyMatch(u -> u.getIsDefault() != null && u.getIsDefault() == 1);
+            briefs.add(TenantBrief.builder()
+                    .tenantId(tenantId)
+                    .tenantCode(tenant.getTenantCode())
+                    .tenantName(tenant.getTenantName())
+                    .roleKeys(roleKeys)
+                    .isDefault(isDefault)
+                    .build());
+        }
+        return briefs;
     }
 
     /**
@@ -165,27 +337,37 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     public List<Menu> listMyMenus(LoginUser current) {
-        // 平台管理员不受角色菜单授权约束（JWT 权限为 *:*:*），短路返回全部启用目录/菜单，
-        // 否则角色授权页取消勾选后管理员自己会丢菜单入口，无法自救
+        // 平台管理员不受角色菜单授权约束（JWT 权限为 *:*:*），
+        // 复用 MenuService 的 Caffeine 缓存，避免每次刷新页面都打 DB
         if (current.isAdmin()) {
-            return menuMapper.selectList(new LambdaQueryWrapper<Menu>()
-                    .eq(Menu::getStatus, 1)
-                    .in(Menu::getMenuType, "M", "C")
-                    .orderByAsc(Menu::getParentId, Menu::getOrderNum));
+            return menuService.listEnabledMenus().stream()
+                    .filter(m -> Menu.TYPE_DIR.equals(m.getMenuType()) || Menu.TYPE_MENU.equals(m.getMenuType()))
+                    .sorted((a, b) -> {
+                        int cmp = Long.compare(a.getParentId() == null ? 0 : a.getParentId(),
+                                b.getParentId() == null ? 0 : b.getParentId());
+                        return cmp != 0 ? cmp : Integer.compare(
+                                a.getOrderNum() == null ? 0 : a.getOrderNum(),
+                                b.getOrderNum() == null ? 0 : b.getOrderNum());
+                    })
+                    .toList();
         }
-        String userId = current.getUserId() != null ? current.getUserId() : selectUserId(current.getUsername());
+        // 直接使用 JWT 中的 userId，避免冗余查库
+        String userId = current.getUserId();
         if (userId == null) {
             return List.of();
         }
-        return menuMapper.selectMenusByUserId(userId);
+        // 多角色场景下只返回当前活跃组织的菜单，避免跨组织菜单泄露
+        return menuMapper.selectMenusByUserIdAndTenantId(userId, current.getTenantId());
     }
 
     @Override
     public ProfileResponse profile(LoginUser current) {
-        User user = userMapper.selectOne(new LambdaQueryWrapper<User>()
-                .eq(User::getUsername, current.getUsername()).last("LIMIT 1"));
-        // 角色名称与键同序下发，供个人中心展示中文角色名
-        List<Role> roles = user == null ? List.of() : roleMapper.selectRolesByUserId(user.getId());
+        // 直接使用 JWT 中的 userId 查询用户信息，避免冗余查库
+        User user = current.getUserId() != null ? userMapper.selectById(current.getUserId()) : null;
+        // 角色名称与键同序下发，供个人中心展示中文角色名；
+        // 多角色场景下只查当前活跃组织的角色，避免跨组织角色泄露
+        List<Role> roles = user == null ? List.of()
+                : roleMapper.selectRolesByUserIdAndTenantId(user.getId(), current.getTenantId());
         // 最近一次成功登录：失败记录不算「上次登录」，避免误导
         LoginLog last = loginLogMapper.selectOne(new LambdaQueryWrapper<LoginLog>()
                 .eq(LoginLog::getUsername, current.getUsername())

@@ -6,7 +6,7 @@
  */
 import { create } from "zustand";
 import type { LoginResponse } from "@/lib/types";
-import { TOKEN_KEY } from "@/lib/api";
+import { TOKEN_KEY, api } from "@/lib/api";
 
 const USER_KEY = "claw_user";
 
@@ -27,6 +27,8 @@ interface AuthState {
   isTenantAdmin: () => boolean;
   /** 是否持有指定按钮权限点（如 system:user:add），通配 *:*:* 视为全持 */
   hasPerm: (perm: string) => boolean;
+  /** 切换到另一个已加入的组织（重新签发 JWT + 刷新页面） */
+  switchTenant: (tenantId: number) => Promise<void>;
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
@@ -80,5 +82,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // 权限点来自登录响应（后端按角色授权菜单聚合），仅作展示层控制，后端仍强制鉴权
     const perms = get().user?.permissions ?? [];
     return perms.includes("*:*:*") || perms.includes(perm);
+  },
+
+  switchTenant: async (tenantId) => {
+    const res = await api.post<LoginResponse>("/api/auth/switchTenant", { tenantId });
+    get().setAuth(res.data);
+    // 切换组织后菜单/权限/工作区全部变更，硬刷新重新聚合
+    window.location.reload();
   },
 }));

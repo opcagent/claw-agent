@@ -86,15 +86,15 @@ const MCP_TRANSPORTS = [
   { value: "streamable-http", label: "Streamable HTTP" },
 ];
 
-/** 配置页左侧菜单项 */
-const CONFIG_MENU: { key: string; label: string; icon: typeof Bot; comment: string }[] = [
+/** 配置页左侧菜单项（adminOnly 标记仅平台管理员可见，minRole 标记最低角色要求） */
+const CONFIG_MENU: { key: string; label: string; icon: typeof Bot; comment: string; adminOnly?: boolean; minRole?: "tenant_admin" }[] = [
   { key: "model", label: "模型提供商", icon: Bot, comment: "模型提供商卡片" },
-  { key: "params", label: "运行参数", icon: Settings, comment: "运行参数卡片" },
-  { key: "tools", label: "工具集管理", icon: Wrench, comment: "工具集管理卡片" },
-  { key: "search", label: "搜索引擎", icon: Search, comment: "搜索引擎 API Key 配置卡片" },
-  { key: "mcp", label: "MCP 服务器", icon: Database, comment: "MCP 服务器" },
-  { key: "skills", label: "技能管理", icon: Code, comment: "技能管理卡片" },
-  { key: "system", label: "平台配置", icon: Package, comment: "平台系统配置" },
+  { key: "params", label: "运行参数", icon: Settings, comment: "运行参数卡片", minRole: "tenant_admin" },
+  { key: "tools", label: "工具集管理", icon: Wrench, comment: "工具集管理卡片", adminOnly: true },
+  { key: "search", label: "搜索引擎", icon: Search, comment: "搜索引擎 API Key 配置卡片", minRole: "tenant_admin" },
+  { key: "mcp", label: "MCP 服务器", icon: Database, comment: "MCP 服务器", minRole: "tenant_admin" },
+  { key: "skills", label: "技能管理", icon: Code, comment: "技能管理卡片", minRole: "tenant_admin" },
+  { key: "system", label: "平台配置", icon: Package, comment: "平台系统配置", adminOnly: true },
 ];
 
 function ConfigPage() {
@@ -136,23 +136,30 @@ function ConfigPage() {
   const [editSearchValue, setEditSearchValue] = useState<string>("");
   const [savingSearch, setSavingSearch] = useState(false);
 
+  // 按角色过滤侧边栏：adminOnly 仅平台管理员可见；minRole=tenant_admin 需租户管理员及以上
+  const visibleMenu = CONFIG_MENU.filter((item) => {
+    if (item.adminOnly) return isAdmin;
+    if (item.minRole === "tenant_admin") return isTenantAdmin;
+    return true;
+  });
+
   // 左侧菜单导航：hash 同步，URL 与菜单名一致
-  const [activeTab, setActiveTab] = useState("model");
+  const [activeTab, setActiveTab] = useState(visibleMenu[0]?.key ?? "model");
   useEffect(() => {
     const hash = window.location.hash.replace("#", "");
-    if (hash && CONFIG_MENU.some((m) => m.key === hash)) setActiveTab(hash);
+    if (hash && visibleMenu.some((m) => m.key === hash)) setActiveTab(hash);
     const onHash = () => {
       const h = window.location.hash.replace("#", "");
-      if (h && CONFIG_MENU.some((m) => m.key === h)) setActiveTab(h);
+      if (h && visibleMenu.some((m) => m.key === h)) setActiveTab(h);
     };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
-  }, []);
+  }, [visibleMenu]);
   const switchTab = (key: string) => {
     setActiveTab(key);
     window.location.hash = key;
   };
-  const activeMenu = CONFIG_MENU.find((m) => m.key === activeTab) ?? CONFIG_MENU[0];
+  const activeMenu = visibleMenu.find((m) => m.key === activeTab) ?? visibleMenu[0];
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -471,7 +478,7 @@ function ConfigPage() {
         {/* 左侧菜单 */}
         <div className="w-48 shrink-0 border-r border-slate-200/70 bg-slate-50/50 p-3">
           <nav className="space-y-0.5">
-            {CONFIG_MENU.map((item) => {
+            {visibleMenu.map((item) => {
               const Icon = item.icon;
               const isActive = activeTab === item.key;
               return (

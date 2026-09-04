@@ -8,11 +8,11 @@ import com.claw.agent.common.RoleConstants;
 import com.claw.agent.mapper.MenuMapper;
 import com.claw.agent.mapper.RoleMapper;
 import com.claw.agent.mapper.RoleMenuMapper;
-import com.claw.agent.mapper.UserRoleMapper;
+import com.claw.agent.mapper.UserTenantMapper;
 import com.claw.agent.model.Menu;
 import com.claw.agent.model.Role;
 import com.claw.agent.model.RoleMenu;
-import com.claw.agent.model.UserRole;
+import com.claw.agent.model.UserTenant;
 import com.claw.agent.security.LoginUser;
 import com.claw.agent.service.RoleService;
 import lombok.RequiredArgsConstructor;
@@ -36,14 +36,18 @@ import java.util.stream.Collectors;
 public class RoleServiceImpl extends ServiceImpl<RoleMapper, Role> implements RoleService {
 
     private final RoleMenuMapper roleMenuMapper;
-    private final UserRoleMapper userRoleMapper;
+    private final UserTenantMapper userTenantMapper;
     private final MenuMapper menuMapper;
 
     @Override
     public List<Role> listRoles(LoginUser current) {
-        return baseMapper.selectList(new LambdaQueryWrapper<Role>()
-                .eq(Role::getTenantId, current.getTenantId())
-                .orderByAsc(Role::getRoleSort));
+        LambdaQueryWrapper<Role> wrapper = new LambdaQueryWrapper<Role>()
+                .orderByAsc(Role::getRoleSort);
+        // 平台管理员跨租户查看全部角色，租户管理员只看本租户
+        if (!current.isAdmin()) {
+            wrapper.eq(Role::getTenantId, current.getTenantId());
+        }
+        return baseMapper.selectList(wrapper);
     }
 
     @Override
@@ -63,6 +67,12 @@ public class RoleServiceImpl extends ServiceImpl<RoleMapper, Role> implements Ro
     @Transactional(rollbackFor = Exception.class)
     public void updateRole(LoginUser current, Long id, Role role) {
         Role existed = selectInTenant(current, id);
+        // 内置角色禁止禁用：停用 admin/tenant_admin/common 将导致平台或租户鉴权链路断裂
+        if (BUILTIN_ROLE_KEYS.contains(existed.getRoleKey())
+                && role.getStatus() != null && role.getStatus() == 0) {
+            throw new BizException(ResultCode.PARAM_ERROR,
+                    "内置角色「" + existed.getRoleName() + "」不可禁用");
+        }
         existed.setRoleName(role.getRoleName());
         existed.setRoleSort(role.getRoleSort());
         existed.setDataScope(role.getDataScope());
@@ -71,16 +81,24 @@ public class RoleServiceImpl extends ServiceImpl<RoleMapper, Role> implements Ro
         baseMapper.updateById(existed);
     }
 
+    /** 内置角色键集合：admin / tenant_admin / common 为系统内置角色，禁止删除 */
+    private static final Set<String> BUILTIN_ROLE_KEYS = Set.of(
+            RoleConstants.ROLE_ADMIN,
+            RoleConstants.ROLE_TENANT_ADMIN,
+            RoleConstants.ROLE_COMMON
+    );
+
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void deleteRole(LoginUser current, Long id) {
         Role existed = selectInTenant(current, id);
-        // 内置管理员角色禁删：删除后租户管理员下次登录将失去管理权限且无法自救
-        if (RoleConstants.ROLE_TENANT_ADMIN.equals(existed.getRoleKey())) {
-            throw new BizException(ResultCode.PARAM_ERROR, "内置租户管理员角色不可删除");
+        // 三个内置角色禁删：删除后系统鉴权链路断裂（admin 失平台入口、tenant_admin 失租户管理、common 失普通用户基线）
+        if (BUILTIN_ROLE_KEYS.contains(existed.getRoleKey())) {
+            throw new BizException(ResultCode.PARAM_ERROR,
+                    "内置角色「" + existed.getRoleName() + "」不可删除");
         }
-        Long assigned = userRoleMapper.selectCount(new LambdaQueryWrapper<UserRole>()
-                .eq(UserRole::getRoleId, id));
+        Long assigned = userTenantMapper.selectCount(new LambdaQueryWrapper<UserTenant>()
+                .eq(UserTenant::getRoleId, id));
         if (assigned != null && assigned > 0) {
             throw new BizException(ResultCode.PARAM_ERROR, "角色已分配给用户，禁止删除");
         }
@@ -152,10 +170,16 @@ public class RoleServiceImpl extends ServiceImpl<RoleMapper, Role> implements Ro
         }
     }
 
-    /** 租户内角色查询（越租户访问返回 404，防信息泄漏） */
+    /** 租户内角色查询（越租户访问返回 404，防信息泄漏）；平台管理员可操作任意租户角色 */
     private Role selectInTenant(LoginUser current, Long id) {
         Role existed = baseMapper.selectById(id);
-        if (existed == null || !current.getTenantId().equals(existed.getTenantId())) {
+        if (existed == null) {
+            throw new BizException(ResultCode.NOT_FOUND, "角色不存在");
+        }
+        if (current.isAdmin()) {
+            return existed;
+        }
+        if (!current.getTenantId().equals(existed.getTenantId())) {
             throw new BizException(ResultCode.NOT_FOUND, "角色不存在");
         }
         return existed;

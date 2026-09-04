@@ -23,6 +23,9 @@ public final class RoleConstants {
     /** admin 角色的通配权限标识（若依约定） */
     public static final String ALL_PERMISSIONS = "*:*:*";
 
+    /** 平台管理员用户名（不属于任何组织，拥有平台级全局权限） */
+    public static final String PLATFORM_ADMIN_USERNAME = "admin";
+
     private RoleConstants() {
     }
 }
