@@ -2,11 +2,17 @@
 # claw-agent 主配置（公共部分）
 # 模型提供商与 Agent 运行参数已数据库化（三级作用域：USER > TENANT > GLOBAL），
 # 由 ConfigService 从 model_provider_config / agent_config 表解析，
-# 在"系统管理"页面维护，无需在此配置。
+# 在“系统管理”页面维护，无需在此配置。
 # ============================================================
+server:
+  shutdown: graceful   # SIGTERM 后停止接收新请求，等待存量连接完成（配合 GracefulShutdownManager）
+
 spring:
   application:
     name: claw-agent
+  # 优雅停机：SIGTERM 后停止接收新请求，等待存量 SSE 流完成
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
   # Jackson：统一时间格式（JSR-310 类型的具体格式由 config/JacksonConfig 定制为 yyyy-MM-dd HH:mm:ss）
   jackson:
     time-zone: Asia/Shanghai          # Date/Calendar 类型的时区基准；LocalDateTime 无时区不受影响

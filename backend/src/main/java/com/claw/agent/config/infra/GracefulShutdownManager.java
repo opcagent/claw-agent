@@ -2,6 +2,7 @@ package com.claw.agent.config.infra;
 
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Component;
 
@@ -32,6 +33,13 @@ public class GracefulShutdownManager implements SmartLifecycle {
 
     /** 组件是否正在运行 */
     private volatile boolean running = true;
+
+    /** 停机等待超时（毫秒），与 application.yml 的 spring.lifecycle.timeout-per-shutdown-phase 保持一致 */
+    @Value("${spring.lifecycle.timeout-per-shutdown-phase:30s}")
+    private java.time.Duration shutdownTimeout;
+
+    /** shutdownTimeout 的毫秒缓存（避免每次 stop 都转换） */
+    private long timeoutMs = 30_000L;
 
     /**
      * 注册一个新的 SSE 流。
@@ -74,10 +82,15 @@ public class GracefulShutdownManager implements SmartLifecycle {
 
     @Override
     public void stop() {
-        log.info("优雅停机开始: 标记 shuttingDown，等待 {} 个活跃 SSE 流完成", activeStreams.get());
+        // 首次调用时缓存配置值
+        if (shutdownTimeout != null) {
+            timeoutMs = shutdownTimeout.toMillis();
+        }
+        log.info("优雅停机开始: 标记 shuttingDown，等待 {} 个活跃 SSE 流完成（超时 {}ms）",
+                activeStreams.get(), timeoutMs);
         shuttingDown.set(true);
         // 等待存量流完成（最多等 timeout-per-shutdown-phase 配置的时间）
-        long deadline = System.currentTimeMillis() + 30_000;
+        long deadline = System.currentTimeMillis() + timeoutMs;
         while (activeStreams.get() > 0 && System.currentTimeMillis() < deadline) {
             try {
                 Thread.sleep(500);
