@@ -71,7 +71,7 @@ function parseProviderModel(dictValue: string): { provider: string; model: strin
     : { provider: dictValue.slice(0, i), model: dictValue.slice(i + 1) };
 }
 
-/** 作用域键 → 中文标签（仅展示层翻译，接口传值仍用英文键） */
+/** 作用域键 → 中文标签 */
 const SCOPE_LABEL: Record<Scope, string> = {
   USER: "用户级",
   TENANT: "租户级",
@@ -102,11 +102,8 @@ function ConfigPage() {
   const isTenantAdmin = useAuthStore((s) => s.isTenantAdmin)();
   const myUsername = useAuthStore((s) => s.user)?.username ?? "";
 
-  const scopeOptions: Scope[] = ["USER"];
-  if (isTenantAdmin) scopeOptions.push("TENANT");
-  if (isAdmin) scopeOptions.push("PLATFORM");
-
-  const [scope, setScope] = useState<Scope>("USER");
+  // 根据角色确定作用域：admin→PLATFORM / tenant_admin→TENANT / common→USER
+  const scope: Scope = isAdmin ? "PLATFORM" : isTenantAdmin ? "TENANT" : "USER";
   const [providers, setProviders] = useState<ModelProviderConfig[]>([]);
   const [params, setParams] = useState<AgentConfigItem[]>([]);
   const [paramKeys, setParamKeys] = useState<ParamKeyInfo[]>([]);
@@ -500,7 +497,7 @@ function ConfigPage() {
         {/* 右侧内容 */}
         <div className="flex-1 overflow-auto p-6">
           <div className="space-y-4">
-            {/* 页头 + 作用域切换(仅支持 scope 的标签页显示) */}
+            {/* 页头（平台管理固定平台级别，无作用域切换） */}
             <div className="flex items-center justify-between">
               <div>
                 <h1 className="text-xl font-semibold text-slate-800">{activeMenu.label}</h1>
@@ -509,32 +506,14 @@ function ConfigPage() {
                     ? "系统级配置，全局生效（需重启服务）"
                     : activeTab === "tools" || activeTab === "skills"
                     ? "全局/用户级数据，不随作用域变化"
-                    : "三级作用域就近覆盖：用户级 > 租户级 > 平台（下级优先）"}
+                    : scope === "PLATFORM"
+                    ? "平台级别配置，全局生效"
+                    : scope === "TENANT"
+                    ? "租户级别配置，本租户生效"
+                    : "用户级别配置，仅本人生效"}
                 </p>
               </div>
-            {/* 仅在支持 scope 的标签页显示切换按钮 */}
-            {(activeTab === "model" || activeTab === "params" || 
-              activeTab === "search" || activeTab === "mcp") && (
-            <div className="flex rounded-full border border-slate-200 bg-white p-1 shadow-sm">
-              {scopeOptions.map((s) => (
-                <button
-                  key={s}
-                  onClick={() => setScope(s)}
-                  className={
-                    "rounded-full px-4 py-1 text-sm transition-colors " +
-                    (scope === s
-                      ? "bg-slate-800 text-white"
-                      : "text-slate-600 hover:bg-slate-100")
-                  }
-                >
-                  {SCOPE_LABEL[s]}
-                </button>
-              ))}
             </div>
-            )}
-          </div>
-
-          {/* 加载状态提示 */}
           {loading && (
             <div className="flex items-center justify-center py-12">
               <div className="text-center">

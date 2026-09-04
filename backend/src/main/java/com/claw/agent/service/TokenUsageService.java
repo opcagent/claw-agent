@@ -17,7 +17,9 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -451,19 +453,20 @@ public class TokenUsageService {
     }
 
     /**
-     * 平台管理员：查询全平台最近 N 个月汇总（按租户聚合）。
+     * 平台管理员：查询全平台最近 N 个月汇总（按租户聚合后按月合并）。
      */
     private List<TokenUsageSummary> getPlatformRecentMonths(LocalDate startDate) {
-        // 简化：返回所有租户的月度汇总，由前端/调用方自行聚合
         LambdaQueryWrapper<TokenUsageSummary> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(TokenUsageSummary::getPeriodType, "monthly")
                .ge(TokenUsageSummary::getPeriodStart, startDate)
                .orderByDesc(TokenUsageSummary::getPeriodStart);
-        return summaryMapper.selectList(wrapper);
+        List<TokenUsageSummary> all = summaryMapper.selectList(wrapper);
+        // 按 periodStart 分组聚合（同一月份可能有多个租户记录）
+        return aggregateByMonth(all);
     }
 
     /**
-     * 租户管理员：查询租户内最近 N 个月汇总（按用户聚合）。
+     * 租户管理员：查询租户内最近 N 个月汇总（按用户聚合后按月合并）。
      */
     private List<TokenUsageSummary> getTenantRecentMonths(Long tenantId, LocalDate startDate) {
         LambdaQueryWrapper<TokenUsageSummary> wrapper = new LambdaQueryWrapper<>();
@@ -471,7 +474,34 @@ public class TokenUsageService {
                .eq(TokenUsageSummary::getPeriodType, "monthly")
                .ge(TokenUsageSummary::getPeriodStart, startDate)
                .orderByDesc(TokenUsageSummary::getPeriodStart);
-        return summaryMapper.selectList(wrapper);
+        List<TokenUsageSummary> all = summaryMapper.selectList(wrapper);
+        // 按 periodStart 分组聚合（同一月份可能有多个用户记录）
+        return aggregateByMonth(all);
+    }
+
+    /**
+     * 将多条月度记录按 periodStart 合并为每月一条（sum 聚合）。
+     */
+    private List<TokenUsageSummary> aggregateByMonth(List<TokenUsageSummary> records) {
+        if (records == null || records.isEmpty()) return records;
+        Map<LocalDate, TokenUsageSummary> map = new LinkedHashMap<>();
+        for (TokenUsageSummary r : records) {
+            LocalDate period = r.getPeriodStart();
+            TokenUsageSummary existing = map.get(period);
+            if (existing == null) {
+                map.put(period, r);
+            } else {
+                existing.setTotalTokens((existing.getTotalTokens() == null ? 0 : existing.getTotalTokens())
+                        + (r.getTotalTokens() == null ? 0 : r.getTotalTokens()));
+                existing.setTotalPromptTokens((existing.getTotalPromptTokens() == null ? 0 : existing.getTotalPromptTokens())
+                        + (r.getTotalPromptTokens() == null ? 0 : r.getTotalPromptTokens()));
+                existing.setTotalCompletionTokens((existing.getTotalCompletionTokens() == null ? 0 : existing.getTotalCompletionTokens())
+                        + (r.getTotalCompletionTokens() == null ? 0 : r.getTotalCompletionTokens()));
+                existing.setRequestCount((existing.getRequestCount() == null ? 0 : existing.getRequestCount())
+                        + (r.getRequestCount() == null ? 0 : r.getRequestCount()));
+            }
+        }
+        return new ArrayList<>(map.values());
     }
 
     // ==================== Token 配额检查 ====================
