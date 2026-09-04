@@ -8,18 +8,20 @@ import io.swagger.v3.oas.models.security.SecurityRequirement;
 import io.swagger.v3.oas.models.security.SecurityScheme;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
 
 /**
  * OpenAPI 3.0 文档配置（springdoc + Knife4j 增强 UI）。
  * <p>
- * 仅在开发阶段启用（通过 application.yml 的 springdoc.api-docs.enabled 控制）。
- * 生产环境务必关闭，避免接口信息泄露。
+ * 仅 dev 环境生效（@Profile("dev")），生产环境不加载此配置类，
+ * 同时 application-prod.yml 中 springdoc.api-docs.enabled=false 双重保险。
  * <p>
  * 访问地址：
  * - Swagger UI：http://localhost:8080/swagger-ui/index.html
  * - Knife4j：http://localhost:8080/doc.html
  * - OpenAPI JSON：http://localhost:8080/v3/api-docs
  */
+@Profile("dev")
 @Configuration
 public class OpenApiConfig {
 

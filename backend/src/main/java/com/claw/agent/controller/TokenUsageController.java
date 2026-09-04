@@ -19,8 +19,9 @@ import java.util.List;
  * <p>
  * 提供用户 Token 使用查询和管理员统计功能。
  * <ul>
- *   <li>普通用户：只能查看自己的 Token 使用统计</li>
- *   <li>租户管理员/平台管理员：可查看本租户所有用户的 Token 使用排行</li>
+ *   <li>普通用户：只能查看本部门及子部门的 Token 使用统计</li>
+ *   <li>租户管理员：可查看本租户所有用户的 Token 使用统计</li>
+ *   <li>平台管理员：可查看全平台的 Token 使用统计</li>
  * </ul>
  */
 @Tag(name = "Token 统计", description = "Token 使用量统计与查询")
@@ -33,17 +34,22 @@ public class TokenUsageController {
     private final TokenUsageService tokenUsageService;
 
     /**
-     * 查询当前用户本月 Token 使用汇总。
+     * 查询当前月份 Token 使用汇总（根据角色自动过滤数据范围）。
+     * <ul>
+     *   <li>平台管理员：全平台汇总</li>
+     *   <li>租户管理员：本租户汇总</li>
+     *   <li>普通用户：本部门及子部门汇总</li>
+     * </ul>
      */
-    @Operation(summary = "本月 Token 汇总", description = "查询当前用户本月 Token 使用汇总")
+    @Operation(summary = "本月 Token 汇总", description = "根据角色数据范围查询本月 Token 使用汇总")
     @GetMapping("/currentMonth")
     public Mono<Result<TokenUsageSummary>> getCurrentMonthSummary() {
         return ReactiveSupport.call(user ->
-                tokenUsageService.getCurrentMonthSummary(user.getUserId(), user.getTenantId()));
+                tokenUsageService.getCurrentMonthSummaryByScope(user));
     }
 
     /**
-     * 查询当前用户指定月份的 Token 使用汇总。
+     * 查询当前用户指定月份的 Token 使用汇总（个人数据）。
      */
     @Operation(summary = "指定月 Token 汇总", description = "查询当前用户指定月份的 Token 使用汇总")
     @GetMapping("/month/{year}/{month}")
@@ -55,25 +61,30 @@ public class TokenUsageController {
     }
 
     /**
-     * 查询当前用户最近 N 个月的 Token 使用汇总列表。
+     * 查询最近 N 个月的 Token 使用汇总列表（根据角色自动过滤数据范围）。
      */
-    @Operation(summary = "近 N 月汇总", description = "查询当前用户最近 N 个月的 Token 使用汇总列表")
+    @Operation(summary = "近 N 月汇总", description = "根据角色数据范围查询最近 N 个月的 Token 使用汇总列表")
     @GetMapping("/recentMonths")
     public Mono<Result<List<TokenUsageSummary>>> getRecentMonthsSummary(
             @RequestParam(defaultValue = "6") int months) {
         return ReactiveSupport.call(user ->
-                tokenUsageService.getRecentMonthsSummary(user.getUserId(), user.getTenantId(), months));
+                tokenUsageService.getRecentMonthsSummaryByScope(user, months));
     }
 
     /**
-     * 查询当前用户的 Token 使用流水(最近 N 条)。
+     * 查询 Token 使用流水（根据角色自动过滤数据范围）。
+     * <ul>
+     *   <li>平台管理员：全平台流水</li>
+     *   <li>租户管理员：本租户流水</li>
+     *   <li>普通用户：本部门及子部门流水</li>
+     * </ul>
      */
-    @Operation(summary = "Token 使用流水", description = "查询当前用户的 Token 使用流水（最近 N 条）")
+    @Operation(summary = "Token 使用流水", description = "根据角色数据范围查询 Token 使用流水（最近 N 条）")
     @GetMapping("/logs")
     public Mono<Result<List<TokenUsageLog>>> getUsageLogs(
             @RequestParam(defaultValue = "50") int limit) {
         return ReactiveSupport.call(user ->
-                tokenUsageService.getUsageLogs(user.getUserId(), user.getTenantId(), limit));
+                tokenUsageService.getUsageLogsByScope(user, limit));
     }
 
     /**

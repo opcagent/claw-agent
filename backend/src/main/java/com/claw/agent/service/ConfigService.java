@@ -55,6 +55,10 @@ public class ConfigService {
     public static final String KEY_COMPACTION_KEEP = "compaction_keep_messages";
     /** 配置键：记忆刷新节流间隔（分钟） */
     public static final String KEY_MEMORY_FLUSH_MINUTES = "memory_flush_throttle_minutes";
+    /** 配置键：月度 Token 配额上限（万 tokens，0=不限制） */
+    public static final String KEY_TOKEN_MONTHLY_QUOTA = "token_monthly_quota";
+    /** 配置键：配额告警阈值（百分比） */
+    public static final String KEY_TOKEN_QUOTA_WARN_PERCENT = "token_quota_warn_percent";
 
     // 搜索引擎 API Key 配置键（存 agent_config 表，三级作用域，加密存储）
     /** 配置键：Tavily API Key */
@@ -347,6 +351,16 @@ public class ConfigService {
                         .key(KEY_MEMORY_FLUSH_MINUTES)
                         .description("长期记忆 flush 节流间隔（分钟，防止频繁落盘）")
                         .defaultValue("10")
+                        .build(),
+                ParamKeyInfo.builder()
+                        .key(KEY_TOKEN_MONTHLY_QUOTA)
+                        .description("月度 Token 配额上限（万 tokens，0=不限制；支持三级作用域覆盖）")
+                        .defaultValue("0")
+                        .build(),
+                ParamKeyInfo.builder()
+                        .key(KEY_TOKEN_QUOTA_WARN_PERCENT)
+                        .description("配额告警阈值（百分比，达到后对话流注入告警事件，不阻断对话）")
+                        .defaultValue("80")
                         .build(),
                 // ---- 搜索引擎 API Key ----
                 ParamKeyInfo.builder()

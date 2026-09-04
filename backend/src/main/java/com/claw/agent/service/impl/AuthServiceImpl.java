@@ -334,7 +334,9 @@ public class AuthServiceImpl implements AuthService {
             return List.of();
         }
         // 多角色场景下只返回当前活跃组织的菜单，避免跨组织菜单泄露
-        return menuMapper.selectMenusByUserIdAndTenantId(userId, current.getTenantId());
+        List<Menu> menus = menuMapper.selectMenusByUserIdAndTenantId(userId, current.getTenantId());
+        // 根据租户功能配置过滤菜单
+        return menuService.filterMenusByTenant(current.getTenantId(), menus);
     }
 
     @Override

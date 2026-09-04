@@ -8,9 +8,11 @@ import com.claw.agent.config.infra.RedisPubSub;
 import com.claw.agent.mapper.MenuMapper;
 import com.claw.agent.mapper.RoleMapper;
 import com.claw.agent.mapper.RoleMenuMapper;
+import com.claw.agent.mapper.TenantFeatureMapper;
 import com.claw.agent.model.Menu;
 import com.claw.agent.model.Role;
 import com.claw.agent.model.RoleMenu;
+import com.claw.agent.model.TenantFeature;
 import com.claw.agent.security.LoginUser;
 import com.claw.agent.service.MenuService;
 import com.github.benmanes.caffeine.cache.Cache;
@@ -36,6 +38,7 @@ public class MenuServiceImpl extends ServiceImpl<MenuMapper, Menu> implements Me
 
     private final RoleMapper roleMapper;
     private final RoleMenuMapper roleMenuMapper;
+    private final TenantFeatureMapper tenantFeatureMapper;
     /** 启用菜单缓存（所有用户共享同一份快照） */
     private final Cache<String, List<Menu>> menuCache;
     /** Redis Pub/Sub（可选：未安装 Redis 时为 null，缓存失效仅本地） */
@@ -213,5 +216,32 @@ public class MenuServiceImpl extends ServiceImpl<MenuMapper, Menu> implements Me
         return roleMapper.selectList(new LambdaQueryWrapper<Role>()
                         .eq(Role::getTenantId, current.getTenantId()))
                 .stream().map(Role::getId).collect(Collectors.toSet());
+    }
+
+    @Override
+    public List<Menu> filterMenusByTenant(Long tenantId, List<Menu> menus) {
+        // 平台管理员（tenantId=0）不过滤
+        if (tenantId == null || tenantId == 0) {
+            return menus;
+        }
+
+        // 获取租户功能配置（使用 BaseMapper 内置方法，替代原 XML 的 selectEnabledMenuIds）
+        List<TenantFeature> features = tenantFeatureMapper.selectList(
+                new LambdaQueryWrapper<TenantFeature>()
+                        .eq(TenantFeature::getTenantId, tenantId)
+                        .eq(TenantFeature::getEnabled, 1)
+                        .select(TenantFeature::getMenuId));
+        List<Long> enabledMenuIds = features.stream().map(TenantFeature::getMenuId).collect(Collectors.toList());
+
+        // 没有配置记录，返回全部菜单（向后兼容）
+        if (enabledMenuIds == null || enabledMenuIds.isEmpty()) {
+            return menus;
+        }
+
+        // 过滤菜单
+        Set<Long> enabledSet = enabledMenuIds.stream().collect(Collectors.toSet());
+        return menus.stream()
+                .filter(menu -> enabledSet.contains(menu.getId()))
+                .collect(Collectors.toList());
     }
 }

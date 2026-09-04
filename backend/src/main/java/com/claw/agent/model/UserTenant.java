@@ -3,6 +3,7 @@ package com.claw.agent.model;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
@@ -21,27 +22,35 @@ import lombok.EqualsAndHashCode;
 public class UserTenant extends BaseEntity {
 
     /** 主键 */
+    @Schema(description = "主键")
     @TableId(type = IdType.AUTO)
     private Long id;
 
     /** 用户ID（关联 sys_user.id） */
+    @Schema(description = "用户ID")
     private String userId;
 
     /** 租户ID（关联 sys_tenant.id） */
+    @Schema(description = "租户ID")
     private Long tenantId;
 
     /** 角色ID（关联 sys_role.id，该组织内的角色） */
+    @Schema(description = "角色ID")
     private Long roleId;
 
     /** 该组织内的部门ID（关联 sys_dept.id） */
+    @Schema(description = "部门ID")
     private Long deptId;
 
     /** 该组织内的职位 */
+    @Schema(description = "职位")
     private String position;
 
     /** 该组织内的状态：1 启用 / 0 禁用 */
+    @Schema(description = "状态：1启用/0禁用")
     private Integer status;
 
     /** 是否默认登录组织：1 是 / 0 否 */
+    @Schema(description = "默认组织：1是/0否")
     private Integer isDefault;
 }

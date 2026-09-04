@@ -3,6 +3,7 @@ package com.claw.agent.model;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
@@ -29,28 +30,36 @@ public class Role extends BaseEntity {
     public static final int DATA_SCOPE_SELF = 5;
 
     /** 角色ID（主键） */
+    @Schema(description = "角色ID")
     @TableId(type = IdType.AUTO)
     private Long id;
 
     /** 所属租户ID（平台超管角色租户为 0） */
+    @Schema(description = "所属租户ID")
     private Long tenantId;
 
     /** 角色名称 */
+    @Schema(description = "角色名称")
     private String roleName;
 
     /** 角色权限字符串（如 admin / common，写入 JWT 与鉴权使用） */
+    @Schema(description = "角色权限标识")
     private String roleKey;
 
     /** 显示顺序 */
+    @Schema(description = "显示顺序")
     private Integer roleSort;
 
     /** 数据权限档位（1-5） */
+    @Schema(description = "数据权限：1全部/2自定义/3本部门/4本部门及以下/5仅本人")
     private Integer dataScope;
 
     /** 状态：1 启用 / 0 禁用 */
+    @Schema(description = "状态：1启用/0禁用")
     private Integer status;
 
     /** 备注 */
+    @Schema(description = "备注")
     private String remark;
 
 }

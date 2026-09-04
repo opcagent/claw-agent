@@ -20,7 +20,7 @@ claw-agent 是一个面向中小企业和个人开发者的 Agent 平台：
 ```
 controller  → 只做参数校验与协议转换，不写业务逻辑；按模块分包：auth（认证）/ chat（对话与上传）/ agent（预设与配置）/ system（用户/角色/部门/菜单/租户/字典/日志）
 service     → 业务逻辑层（接口 + Impl：接口 extends IService<T>，实现 extends ServiceImpl<Mapper, Entity> implements 接口，实现类放 service/impl）
-mapper      → 数据访问层（MyBatis Plus BaseMapper；自定义 SQL 一律写在 resources/mapper/*.xml，禁用 @Select 等注解 SQL）；
+mapper      → 数据访问层（MyBatis Plus BaseMapper；优先用内置方法，自定义 SQL 仅限多表 JOIN 等场景且写在 resources/mapper/*.xml，禁用 @Select 等注解 SQL）；
               涉及联表（如 sys_user JOIN sys_user_tenant）的查询禁止在 Java 层用 inSql 拼接字符串，必须在 XML 中定义
 model/pojo  → 实体（对应表，业务实体一律 extends BaseEntity）、DTO（请求/响应对象）、枚举
 config      → Spring 配置类（Agent / Security / MyBatis / CORS）
@@ -361,6 +361,27 @@ Agent 通过内置工具调用子 Agent：
 - **表结构变更一律通过 Flyway 迁移脚本**：`backend/src/main/resources/db/migration/V<n>__<描述>.sql`；
 - 迁移脚本只增不改（已执行的脚本修改会导致校验失败）；新脚本版本号递增；
 - 脚本内部保持幂等（`CREATE TABLE IF NOT EXISTS` / `INSERT ... WHERE NOT EXISTS`）。
+
+### 9.1 MyBatis Plus 使用规约（强制）
+
+- **能用 BaseMapper 内置方法解决的，禁止写自定义 XML SQL**：单表 CRUD、条件查询、分页、批量操作一律用 `BaseMapper` / `IService` 内置方法 + `LambdaQueryWrapper`；
+- **允许写自定义 XML 的场景**（必须说明原因）：
+  - 多表 JOIN 查询（如用户-角色-菜单联表）；
+  - MySQL 特有语法（如 `ON DUPLICATE KEY UPDATE`）；
+  - 复杂动态 SQL（多条件组合、子查询）；
+- **禁止事项**：
+  - 禁止在 XML 中拼接多条 SQL（`DELETE; INSERT;`），MySQL JDBC 默认不支持多语句执行；
+  - 禁止在 XML 中写原始 `INSERT` 绕过 `AuditMetaObjectHandler`（审计字段会为空），批量插入用 `IService.saveBatch()`；
+  - 禁止在 Mapper 接口使用 `@Select`、`@Insert`、`@Update`、`@Delete` 注解写 SQL（统一放 XML 或用 BaseMapper）；
+- **Mapper 接口规范**：
+  - 继承 `BaseMapper<Entity>`，无自定义方法时接口体留空即可；
+  - 自定义方法仅放多表 JOIN 等 BaseMapper 无法覆盖的场景；
+  - 自定义 SQL 写在 `resources/mapper/*.xml`，文件头注释说明为什么不用 BaseMapper；
+- **Service 层规范**：
+  - 继承 `IService<Entity>` + `ServiceImpl<Mapper, Entity>`；
+  - 优先用 `IService` 内置方法（`save`、`saveBatch`、`update`、`remove`、`getOne`、`list`、`page`）；
+  - 复杂查询用 `LambdaQueryWrapper` 构建条件，禁止手写 SQL 字符串；
+  - 批量插入必须用 `saveBatch()`（触发 `AuditMetaObjectHandler` 填充审计字段），禁止循环单条 `insert` 或 XML 批量 INSERT。
 
 ## 10. 前端规约（frontend/ 独立工程）
 

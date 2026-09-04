@@ -674,6 +674,10 @@ export default function ChatView() {
           });
         }
         break;
+      case "quota_warn":
+        // Token 配额告警（非阻断）：显示 Toast 提醒用户
+        toast.warning(event.message || "本月 Token 用量较高，请注意控制使用");
+        break;
       default:
         break; // ignore 等其它事件
     }

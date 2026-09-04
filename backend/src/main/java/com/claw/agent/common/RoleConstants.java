@@ -26,6 +26,9 @@ public final class RoleConstants {
     /** 平台管理员用户名（不属于任何组织，拥有平台级全局权限） */
     public static final String PLATFORM_ADMIN_USERNAME = "admin";
 
+    /** 租户模块权限标识前缀（平台管理员专属，租户管理员授权时整体排除） */
+    public static final String PERMS_TENANT_PREFIX = "system:tenant:";
+
     private RoleConstants() {
     }
 }

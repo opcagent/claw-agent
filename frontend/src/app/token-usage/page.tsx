@@ -22,7 +22,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
-import { Loader2, TrendingUp, MessageSquare, Calendar, Clock, Database, Users } from "lucide-react";
+import { Loader2, TrendingUp, MessageSquare, Calendar, Clock, Database, Users, Gauge } from "lucide-react";
 import type { TokenUsageLog, TokenUsageSummary } from "@/lib/types";
 
 export default function TokenUsagePage() {
@@ -34,6 +34,8 @@ export default function TokenUsagePage() {
   const isAdmin = useAuthStore((s) => s.isAdmin)();
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
+  /** 月度配额上限（万 tokens，0=不限制） */
+  const [quotaWan, setQuotaWan] = useState(0);
 
   useEffect(() => {
     loadTokenUsageData();
@@ -49,16 +51,20 @@ export default function TokenUsagePage() {
     try {
       setLoading(true);
 
-      // 并行加载三个接口
-      const [currentRes, recentRes, logsRes] = await Promise.all([
+      // 并行加载三个接口 + 配额配置
+      const [currentRes, recentRes, logsRes, paramsRes] = await Promise.all([
         api.get<TokenUsageSummary>("/api/tokenUsage/currentMonth"),
         api.get<TokenUsageSummary[]>("/api/tokenUsage/recentMonths?months=6"),
         api.get<TokenUsageLog[]>("/api/tokenUsage/logs?limit=50"),
+        api.get<Array<{ configKey: string; configValue: string }>>("/api/config/params?scope=PLATFORM").catch(() => ({ data: [] })),
       ]);
 
       setCurrentMonth(currentRes.data || null);
       setRecentMonths(recentRes.data || []);
       setLogs(logsRes.data || []);
+      // 解析配额配置
+      const quotaItem = (paramsRes.data || []).find((p) => p.configKey === "token_monthly_quota");
+      setQuotaWan(quotaItem ? parseInt(quotaItem.configValue, 10) || 0 : 0);
     } catch (error) {
       console.error("加载 Token 使用数据失败:", error);
       // 显示友好的错误提示
@@ -210,6 +216,40 @@ export default function TokenUsagePage() {
         </div>
       )}
 
+      {/* Token 配额进度条（配额 > 0 时显示） */}
+      {currentMonth && quotaWan > 0 && (() => {
+        const quotaLimit = quotaWan * 10_000;
+        const used = currentMonth.totalTokens || 0;
+        const percent = Math.min(Math.round((used / quotaLimit) * 100), 100);
+        const isWarn = percent >= 80;
+        const isExceeded = percent >= 100;
+        return (
+          <Card className={isExceeded ? "border-rose-200 bg-rose-50/50" : isWarn ? "border-amber-200 bg-amber-50/50" : ""}>
+            <CardContent className="flex items-center gap-4 py-4">
+              <Gauge className={`h-5 w-5 shrink-0 ${isExceeded ? "text-rose-500" : isWarn ? "text-amber-500" : "text-emerald-500"}`} />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="text-sm font-medium text-slate-700">本月配额</span>
+                  <span className={`text-sm font-semibold ${isExceeded ? "text-rose-600" : isWarn ? "text-amber-600" : "text-slate-600"}`}>
+                    {percent}%
+                  </span>
+                </div>
+                <div className="mt-1.5 h-2 w-full rounded-full bg-slate-200/70 overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all duration-500 ${isExceeded ? "bg-rose-500" : isWarn ? "bg-amber-400" : "bg-emerald-500"}`}
+                    style={{ width: `${percent}%` }}
+                  />
+                </div>
+                <div className="mt-1 flex justify-between text-xs text-muted-foreground">
+                  <span>{formatNumber(used)} tokens</span>
+                  <span>上限 {formatNumber(quotaLimit)} tokens</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })()}
+
       {/* Tab 切换 */}
       <Tabs defaultValue="trend" className="space-y-4">
         <TabsList>
@@ -296,6 +336,7 @@ export default function TokenUsagePage() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>时间</TableHead>
+                      <TableHead>调用人</TableHead>
                       <TableHead>会话 ID</TableHead>
                       <TableHead>提供商</TableHead>
                       <TableHead>模型</TableHead>
@@ -312,6 +353,7 @@ export default function TokenUsagePage() {
                           <TableCell className="font-mono text-xs">
                             {formatTime(log.usageTime)}
                           </TableCell>
+                          <TableCell className="text-sm">{log.username || "-"}</TableCell>
                           <TableCell className="font-mono text-xs truncate max-w-[100px]">
                             {log.sessionId || "-"}
                           </TableCell>

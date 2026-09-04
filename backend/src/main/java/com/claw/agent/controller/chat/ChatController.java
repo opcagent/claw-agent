@@ -12,8 +12,11 @@ import com.claw.agent.model.dto.ChatEvent;
 import com.claw.agent.model.dto.ChatRequest;
 import com.claw.agent.model.dto.ConfirmRequest;
 import com.claw.agent.model.dto.RenameSessionRequest;
+import com.claw.agent.security.LoginUser;
 import com.claw.agent.security.SecurityUtil;
 import com.claw.agent.service.AgentService;
+import com.claw.agent.service.ConfigService;
+import com.claw.agent.service.TokenUsageService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -50,6 +53,8 @@ public class ChatController {
     private final AgentService agentService;
     private final GracefulShutdownManager shutdownManager;
     private final RateLimiter rateLimiter;
+    private final ConfigService configService;
+    private final TokenUsageService tokenUsageService;
 
     /** 发起流式对话（SSE）；sessionId 为空时服务端新建会话 */
     @Operation(summary = "流式对话", description = "发起 SSE 流式对话，sessionId 为空时服务端新建会话")
@@ -71,7 +76,12 @@ public class ChatController {
                     if (!rateLimiter.tryAcquireUser(user.getUsername())) {
                         return Flux.<ChatEvent>empty();
                     }
-                    return agentService.chat(user, request);
+                    // Token 配额告警（非阻断）：达到阈值时在 SSE 流头部插入告警事件，对话正常继续
+                    Flux<ChatEvent> quotaWarnEvent = buildQuotaWarnEvent(user);
+                    Flux<ChatEvent> chatEvents = agentService.chat(user, request);
+                    return quotaWarnEvent != null
+                            ? Flux.concat(quotaWarnEvent, chatEvents)
+                            : chatEvents;
                 })
                 // 用户限流返回空流时，统一转为限流错误（doFinally 负责释放 acquire + global）
                 .switchIfEmpty(Flux.error(new BizException(ResultCode.RATE_LIMITED,
@@ -222,5 +232,47 @@ public class ChatController {
                 }).subscribeOn(Schedulers.boundedElastic()))
                 .switchIfEmpty(Mono.error(new com.claw.agent.common.BizException(
                         com.claw.agent.common.ResultCode.UNAUTHORIZED, "未登录")));
+    }
+
+    // ==================== Token 配额告警（非阻断） ====================
+
+    /**
+     * 构建 Token 配额告警事件（流头部插入）。
+     * <p>
+     * 配额为 0 或未达阈值时返回 null，不影响 SSE 流；
+     * 达到告警阈值时生成一条 {@code quota_warn} 事件，前端展示横幅提醒。
+     *
+     * @param user 当前登录用户
+     * @return 包含单条告警事件的 Flux，或 null（无需告警）
+     */
+    private Flux<ChatEvent> buildQuotaWarnEvent(LoginUser user) {
+        try {
+            int quotaWan = configService.resolveInt(
+                    ConfigService.KEY_TOKEN_MONTHLY_QUOTA, user.getTenantId(), user.getUserId(), 0);
+            if (quotaWan <= 0) {
+                return null;
+            }
+            int warnPercent = configService.resolveInt(
+                    ConfigService.KEY_TOKEN_QUOTA_WARN_PERCENT, user.getTenantId(), user.getUserId(), 80);
+            TokenUsageService.QuotaStatus status =
+                    tokenUsageService.checkQuota(user.getUserId(), user.getTenantId(), quotaWan, warnPercent);
+            if (status == null || !status.warn()) {
+                return null;
+            }
+            log.debug("Token 配额告警: user={}, percent={}, exceeded={}",
+                    user.getUsername(), status.percent(), status.exceeded());
+            ChatEvent warnEvent = ChatEvent.builder()
+                    .type("quota_warn")
+                    .sessionId("")
+                    .message(status.exceeded()
+                            ? "本月 Token 用量已达 " + status.percent() + "%，超出配额上限"
+                            : "本月 Token 用量已达 " + status.percent() + "%，请注意控制使用")
+                    .build();
+            return Flux.just(warnEvent);
+        } catch (Exception e) {
+            // 配额检查失败不影响对话主流程
+            log.warn("Token 配额检查失败（不影响对话）: user={}", user.getUsername(), e);
+            return null;
+        }
     }
 }
