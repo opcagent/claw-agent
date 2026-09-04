@@ -18,7 +18,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
-import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -192,48 +191,52 @@ public class ConfigService {
     }
 
     /**
-     * 三级作用域单次查询：OR 条件合并 USER/TENANT/PLATFORM，按优先级排序取首条。
+     * 三级作用域单次查询：分别查 USER/TENANT/PLATFORM，按优先级取首条命中。
+     * <p>
+     * 原 OR 合并写法在部分 MyBatis-Plus 版本中嵌套 AND/OR 生成不稳定，
+     * 改为三次独立查询 + 优先级排序，语义清晰且兼容所有版本。
      */
     private String doResolveValue(String key, Long tenantId, String userId) {
-        LambdaQueryWrapper<AgentConfigItem> wrapper = new LambdaQueryWrapper<AgentConfigItem>()
-                .eq(AgentConfigItem::getConfigKey, key);
         boolean hasUser = StringUtils.hasText(userId);
         boolean hasTenant = tenantId != null;
-        // OR 条件合并三个作用域的查询条件
-        wrapper.and(w -> {
-            int idx = 0;
-            if (hasUser) {
-                w.or(idx++ > 0).nested(n -> n
-                        .eq(AgentConfigItem::getScope, SCOPE_USER)
-                        .eq(AgentConfigItem::getTenantId, tenantId)
-                        .eq(AgentConfigItem::getOwnerId, userId));
+
+        // 1. 优先查 USER 级配置
+        if (hasUser && hasTenant) {
+            AgentConfigItem userItem = agentConfigMapper.selectOne(
+                    new LambdaQueryWrapper<AgentConfigItem>()
+                            .eq(AgentConfigItem::getScope, SCOPE_USER)
+                            .eq(AgentConfigItem::getTenantId, tenantId)
+                            .eq(AgentConfigItem::getOwnerId, userId)
+                            .eq(AgentConfigItem::getConfigKey, key)
+                            .last("LIMIT 1"));
+            if (userItem != null) {
+                return userItem.getConfigValue();
             }
-            if (hasTenant) {
-                w.or(idx++ > 0).nested(n -> n
-                        .eq(AgentConfigItem::getScope, SCOPE_TENANT)
-                        .eq(AgentConfigItem::getTenantId, tenantId)
-                        .isNull(AgentConfigItem::getOwnerId));
-            }
-            w.or(idx > 0).nested(n -> n
-                    .eq(AgentConfigItem::getScope, SCOPE_PLATFORM)
-                    .eq(AgentConfigItem::getTenantId, 0L)
-                    .isNull(AgentConfigItem::getOwnerId));
-        });
-        List<AgentConfigItem> items = agentConfigMapper.selectList(wrapper);
-        if (items.isEmpty()) {
-            return null;
         }
-        // 按作用域优先级排序：USER(0) > TENANT(1) > PLATFORM(2)，取最高优先级
-        return items.stream()
-                .min(Comparator.comparingInt(item -> {
-                    switch (item.getScope()) {
-                        case SCOPE_USER: return 0;
-                        case SCOPE_TENANT: return 1;
-                        default: return 2;
-                    }
-                }))
-                .map(AgentConfigItem::getConfigValue)
-                .orElse(null);
+
+        // 2. 其次查 TENANT 级配置
+        if (hasTenant) {
+            AgentConfigItem tenantItem = agentConfigMapper.selectOne(
+                    new LambdaQueryWrapper<AgentConfigItem>()
+                            .eq(AgentConfigItem::getScope, SCOPE_TENANT)
+                            .eq(AgentConfigItem::getTenantId, tenantId)
+                            .isNull(AgentConfigItem::getOwnerId)
+                            .eq(AgentConfigItem::getConfigKey, key)
+                            .last("LIMIT 1"));
+            if (tenantItem != null) {
+                return tenantItem.getConfigValue();
+            }
+        }
+
+        // 3. 最后查 PLATFORM 级配置
+        AgentConfigItem platformItem = agentConfigMapper.selectOne(
+                new LambdaQueryWrapper<AgentConfigItem>()
+                        .eq(AgentConfigItem::getScope, SCOPE_PLATFORM)
+                        .eq(AgentConfigItem::getTenantId, 0L)
+                        .isNull(AgentConfigItem::getOwnerId)
+                        .eq(AgentConfigItem::getConfigKey, key)
+                        .last("LIMIT 1"));
+        return platformItem != null ? platformItem.getConfigValue() : null;
     }
 
     /** 解析整型配置值，未配置或非法时返回默认值 */
