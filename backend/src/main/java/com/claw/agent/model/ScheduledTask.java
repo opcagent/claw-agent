@@ -3,6 +3,7 @@ package com.claw.agent.model;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
@@ -23,42 +24,55 @@ public class ScheduledTask extends BaseEntity {
     public static final String STATUS_FAIL = "FAIL";
 
     /** 主键（数据库自增） */
+    @Schema(description = "主键")
     @TableId(type = IdType.AUTO)
     private Long id;
 
     /** 所属租户ID */
+    @Schema(description = "租户ID")
     private Long tenantId;
 
     /** 所属用户ID */
+    @Schema(description = "用户ID")
     private String userId;
 
     /** 所属用户名（冗余） */
+    @Schema(description = "用户名")
     private String username;
 
     /** 任务名称 */
+    @Schema(description = "任务名称")
     private String taskName;
 
     /** Cron 表达式 */
+    @Schema(description = "Cron表达式")
     private String cronExpr;
 
     /** 预设模板编码（可选） */
+    @Schema(description = "预设模板编码")
     private String presetCode;
 
     /** 流水线编码（可选） */
+    @Schema(description = "流水线编码")
     private String pipelineCode;
 
     /** 发送给 Agent 的消息内容 */
+    @Schema(description = "消息内容")
     private String promptContent;
 
     /** 结果通知邮箱（为空不通知） */
+    @Schema(description = "通知邮箱")
     private String notifyEmail;
 
     /** 是否启用：1 启用 / 0 禁用 */
+    @Schema(description = "启用状态：1启用/0禁用")
     private Integer enabled;
 
     /** 上次执行时间 */
+    @Schema(description = "上次执行时间")
     private java.time.LocalDateTime lastRunTime;
 
     /** 下次执行时间 */
+    @Schema(description = "下次执行时间")
     private java.time.LocalDateTime nextRunTime;
 }

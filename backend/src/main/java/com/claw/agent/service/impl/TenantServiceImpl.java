@@ -30,9 +30,6 @@ import java.util.List;
 @RequiredArgsConstructor
 public class TenantServiceImpl extends ServiceImpl<TenantMapper, Tenant> implements TenantService {
 
-    /** 租户模块权限标识前缀（新租户管理员授权时整体排除，覆盖租户菜单与其增删改按钮） */
-    private static final String PERMS_TENANT_PREFIX = "system:tenant:";
-
     /** 智能对话菜单权限标识（普通用户唯一可用菜单） */
     private static final String PERMS_CHAT_USE = "chat:use";
 
@@ -154,7 +151,7 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, Tenant> impleme
         if (existed != null && existed > 0) {
             throw new BizException(ResultCode.PARAM_ERROR, "租户编码已存在");
         }
-
+    
         // 2. 创建租户
         Tenant tenant = new Tenant();
         tenant.setTenantCode(request.getTenantCode());
@@ -162,62 +159,53 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, Tenant> impleme
         tenant.setStatus(request.getStatus() == null ? 1 : request.getStatus());
         tenant.setRemark(request.getRemark());
         baseMapper.insert(tenant);
-
+    
         // 3. 初始化组织骨架（根部门 + 内置角色 + 菜单授权）
         initTenantSkeleton(tenant);
-
-        // 4. 如果提供了管理员信息，创建管理员用户
-        if (request.getAdminUsername() != null && !request.getAdminUsername().trim().isEmpty()) {
-            // 校验用户名全局唯一
-            Long userExisted = userMapper.selectCount(new LambdaQueryWrapper<User>()
-                    .eq(User::getUsername, request.getAdminUsername()));
-            if (userExisted != null && userExisted > 0) {
-                throw new BizException(ResultCode.USER_EXISTS, "用户名已存在");
-            }
-
-            // 校验密码必填
-            if (request.getAdminPassword() == null || request.getAdminPassword().trim().isEmpty()) {
-                throw new BizException(ResultCode.PARAM_ERROR, "管理员密码不能为空");
-            }
-
-            // 查找该租户的 tenant_admin 角色
-            Role adminRole = roleMapper.selectOne(new LambdaQueryWrapper<Role>()
-                    .eq(Role::getTenantId, tenant.getId())
-                    .eq(Role::getRoleKey, RoleConstants.ROLE_TENANT_ADMIN)
-                    .last("LIMIT 1"));
-            if (adminRole == null) {
-                throw new BizException(ResultCode.NOT_FOUND, "租户管理员角色不存在");
-            }
-
-            // 创建管理员用户并建立组织关联
-            User adminUser = new User();
-            adminUser.setUsername(request.getAdminUsername().trim());
-            adminUser.setPassword(passwordEncoder.encode(request.getAdminPassword()));
-            adminUser.setNickname(request.getAdminNickname());
-            adminUser.setPhone(request.getAdminPhone());
-            adminUser.setEmail(request.getAdminEmail());
-            adminUser.setGender(request.getAdminGender() == null ? 0 : request.getAdminGender());
-            adminUser.setStatus(1);
-            // 生成规则ID：租户编码_自增序号（与 UserServiceImpl 保持一致）
-            String tenantCode = request.getTenantCode();
-            adminUser.setId(tenantCode + "_1");
-            userMapper.insert(adminUser);
-
-            // 创建 sys_user_tenant 关联（分配 tenant_admin 角色）
-            UserTenant ut = new UserTenant();
-            ut.setUserId(adminUser.getId());
-            ut.setTenantId(tenant.getId());
-            ut.setRoleId(adminRole.getId());
-            ut.setStatus(1);
-            ut.setIsDefault(1);
-            userTenantMapper.insert(ut);
-
-            log.info("租户及初始管理员已创建: tenant={}, adminUser={}, operator={}",
-                    tenant.getTenantName(), adminUser.getUsername(), current.getUsername());
-        } else {
-            log.info("租户已创建（无初始管理员）: tenant={}, operator={}",
-                    tenant.getTenantName(), current.getUsername());
+    
+        // 4. 校验管理员用户名全局唯一
+        Long userExisted = userMapper.selectCount(new LambdaQueryWrapper<User>()
+                .eq(User::getUsername, request.getAdminUsername()));
+        if (userExisted != null && userExisted > 0) {
+            throw new BizException(ResultCode.USER_EXISTS, "管理员用户名已存在");
         }
+    
+        // 5. 查找该租户的 tenant_admin 角色
+        Role adminRole = roleMapper.selectOne(new LambdaQueryWrapper<Role>()
+                .eq(Role::getTenantId, tenant.getId())
+                .eq(Role::getRoleKey, RoleConstants.ROLE_TENANT_ADMIN)
+                .last("LIMIT 1"));
+        if (adminRole == null) {
+            throw new BizException(ResultCode.NOT_FOUND, "租户管理员角色不存在");
+        }
+    
+        // 6. 创建管理员用户并建立组织关联
+        User adminUser = new User();
+        adminUser.setUsername(request.getAdminUsername().trim());
+        adminUser.setPassword(passwordEncoder.encode(request.getAdminPassword()));
+        adminUser.setNickname(request.getAdminNickname());
+        adminUser.setPhone(request.getAdminPhone());
+        adminUser.setEmail(request.getAdminEmail());
+        adminUser.setGender(request.getAdminGender() == null ? 0 : request.getAdminGender());
+        adminUser.setStatus(1);
+        // 生成规则 ID：租户编码_自增序号（与 UserServiceImpl 保持一致）
+        String tenantCode = request.getTenantCode();
+        adminUser.setId(tenantCode + "_1");
+        userMapper.insert(adminUser);
+    
+        // 7. 创建 sys_user_tenant 关联（分配 tenant_admin 角色）
+        UserTenant ut = new UserTenant();
+        ut.setUserId(adminUser.getId());
+        ut.setTenantId(tenant.getId());
+        ut.setRoleId(adminRole.getId());
+        ut.setDeptId(null); // 初始无部门，管理员可在部门管理中分配
+        ut.setPosition(null);
+        ut.setStatus(1);
+        ut.setIsDefault(1);
+        userTenantMapper.insert(ut);
+    
+        log.info("租户及初始管理员已创建：tenant={}, adminUser={}, operator={}",
+                tenant.getTenantName(), adminUser.getUsername(), current.getUsername());
     }
 
     // ------------------------------------------------------------
@@ -253,7 +241,7 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, Tenant> impleme
                 .eq(Menu::getStatus, 1));
         for (Menu menu : menus) {
             // 租户模块为平台管理员专属：菜单与按钮（system:tenant:*）整体排除
-            if (menu.getPerms() != null && menu.getPerms().startsWith(PERMS_TENANT_PREFIX)) {
+            if (menu.getPerms() != null && menu.getPerms().startsWith(RoleConstants.PERMS_TENANT_PREFIX)) {
                 continue;
             }
             insertRoleMenu(tenantAdmin.getId(), menu.getId());

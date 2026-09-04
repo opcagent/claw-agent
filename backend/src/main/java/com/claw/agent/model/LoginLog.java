@@ -3,6 +3,7 @@ package com.claw.agent.model;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 
 import java.time.LocalDateTime;
@@ -24,27 +25,35 @@ public class LoginLog {
     public static final String TYPE_LOGOUT = "LOGOUT";
 
     /** 日志ID（主键） */
+    @Schema(description = "日志ID")
     @TableId(type = IdType.AUTO)
     private Long id;
 
     /** 用户名（登录失败时也记录） */
+    @Schema(description = "用户名")
     private String username;
 
     /** 用户所属租户ID（登录失败/用户不存在时为空） */
+    @Schema(description = "租户ID")
     private Long tenantId;
 
     /** 事件类型：LOGIN / LOGOUT */
+    @Schema(description = "事件类型")
     private String eventType;
 
     /** 状态：1 成功 / 0 失败 */
+    @Schema(description = "状态：1成功/0失败")
     private Integer status;
 
     /** 提示信息（失败原因等） */
+    @Schema(description = "提示信息")
     private String msg;
 
     /** 访问者 IP（由 ClientIpFilter 解析，代理场景优先取 X-Forwarded-For 首段） */
+    @Schema(description = "访问IP")
     private String ip;
 
     /** 事件时间 */
+    @Schema(description = "事件时间")
     private LocalDateTime loginTime;
 }

@@ -6,7 +6,7 @@ import lombok.Data;
 /**
  * 新增租户请求（携带初始管理员信息）。
  * <p>
- * 平台管理员创建新租户时，可同时指定该租户的初始管理员账号。
+ * 平台管理员创建新租户时，必须同时指定该租户的初始管理员账号。
  * 系统会自动创建用户并授予 tenant_admin 角色。
  */
 @Data
@@ -28,12 +28,14 @@ public class TenantCreateWithAdminRequest {
     /** 备注 */
     private String remark;
 
-    // ==================== 初始管理员信息（可选） ====================
+    // ==================== 初始管理员信息（必填） ====================
 
-    /** 管理员用户名（留空则不创建管理员） */
+    /** 管理员用户名（必填） */
+    @NotBlank(message = "管理员用户名不能为空")
     private String adminUsername;
 
-    /** 管理员密码（必填，如果提供了 adminUsername） */
+    /** 管理员密码（必填） */
+    @NotBlank(message = "管理员密码不能为空")
     private String adminPassword;
 
     /** 管理员昵称 */

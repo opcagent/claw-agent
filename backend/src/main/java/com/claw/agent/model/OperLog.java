@@ -3,6 +3,7 @@ package com.claw.agent.model;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 
 import java.time.LocalDateTime;
@@ -18,33 +19,43 @@ import java.time.LocalDateTime;
 public class OperLog {
 
     /** 日志ID（主键） */
+    @Schema(description = "日志ID")
     @TableId(type = IdType.AUTO)
     private Long id;
 
     /** 操作人所属租户ID */
+    @Schema(description = "租户ID")
     private Long tenantId;
 
     /** 功能模块（如 用户管理 / 菜单管理） */
+    @Schema(description = "功能模块")
     private String module;
 
     /** 操作类型（OperType 枚举名：CREATE/UPDATE/DELETE/GRANT/OTHER） */
+    @Schema(description = "操作类型")
     private String operType;
 
     /** 操作描述（接口用途简述） */
+    @Schema(description = "操作描述")
     private String operDesc;
 
     /** 状态：1 成功 / 0 失败 */
+    @Schema(description = "状态：1成功/0失败")
     private Integer status;
 
     /** 失败原因（成功时为空） */
+    @Schema(description = "失败原因")
     private String errorMsg;
 
     /** 操作人用户名 */
+    @Schema(description = "操作人")
     private String operName;
 
     /** 访问者 IP（由 ClientIpFilter 解析，代理场景优先取 X-Forwarded-For 首段） */
+    @Schema(description = "操作IP")
     private String ip;
 
     /** 操作时间 */
+    @Schema(description = "操作时间")
     private LocalDateTime operTime;
 }

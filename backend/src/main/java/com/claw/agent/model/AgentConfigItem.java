@@ -3,6 +3,7 @@ package com.claw.agent.model;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
@@ -19,24 +20,31 @@ import lombok.EqualsAndHashCode;
 public class AgentConfigItem extends BaseEntity {
 
     /** 主键 */
+    @Schema(description = "主键")
     @TableId(type = IdType.AUTO)
     private Long id;
 
     /** 作用域：GLOBAL / TENANT / USER */
+    @Schema(description = "作用域")
     private String scope;
 
     /** 租户ID（GLOBAL 为 0） */
+    @Schema(description = "租户ID")
     private Long tenantId;
 
     /** 归属用户ID（USER 作用域为 sys_user.id，非 USER 为 null） */
+    @Schema(description = "归属用户ID")
     private String ownerId;
 
     /** 配置键（同作用域内唯一） */
+    @Schema(description = "配置键")
     private String configKey;
 
     /** 配置值 */
+    @Schema(description = "配置值")
     private String configValue;
 
     /** 配置说明 */
+    @Schema(description = "配置说明")
     private String remark;
 }

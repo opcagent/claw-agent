@@ -6,7 +6,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Pencil, Plus, Trash2, UserCog } from "lucide-react";
+import { Pencil, Plus, Settings2, Trash2, UserCog, ChevronRight, ChevronDown, Folder, File } from "lucide-react";
 import AppShell from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -32,7 +32,7 @@ import {
 import { api } from "@/lib/api";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 import { useAuthStore } from "@/store/auth";
-import type { SysTenant, SysUser } from "@/lib/types";
+import type { SysTenant, SysUser, SysMenu } from "@/lib/types";
 
 function emptyTenant(): SysTenant {
   return { tenantCode: "", tenantName: "", status: 1, remark: "" };
@@ -50,6 +50,14 @@ function TenantAdminPage() {
   const [tenantUsers, setTenantUsers] = useState<SysUser[]>([]);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [loadingUsers, setLoadingUsers] = useState(false);
+
+  // 配置功能模块相关状态
+  const [configFeatures, setConfigFeatures] = useState<SysTenant | null>(null);
+  const [menuTree, setMenuTree] = useState<SysMenu[]>([]);
+  const [checkedMenuIds, setCheckedMenuIds] = useState<Set<number>>(new Set());
+  const [expandedNodes, setExpandedNodes] = useState<Set<number>>(new Set());
+  const [loadingFeatures, setLoadingFeatures] = useState(false);
+  const [savingFeatures, setSavingFeatures] = useState(false);
 
   // 非管理员：只读查看自己所属租户
   const [myTenant, setMyTenant] = useState<SysTenant | null>(null);
@@ -123,6 +131,126 @@ function TenantAdminPage() {
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "删除失败");
     }
+  }
+
+  /** 构建菜单树 */
+  function buildMenuTree(menus: SysMenu[]): SysMenu[] {
+    const map = new Map<number, SysMenu & { children: SysMenu[] }>();
+    const roots: (SysMenu & { children: SysMenu[] })[] = [];
+    menus.forEach((m) => map.set(m.id, { ...m, children: [] }));
+    map.forEach((m) => {
+      if (m.parentId === 0 || !map.has(m.parentId)) roots.push(m);
+      else map.get(m.parentId)!.children.push(m);
+    });
+    return roots;
+  }
+
+  /** 打开配置功能模块 */
+  async function openFeatureConfig(tenant: SysTenant) {
+    setConfigFeatures(tenant);
+    setLoadingFeatures(true);
+    try {
+      const [allMenus, featureIds] = await Promise.all([
+        api.get<SysMenu[]>("/api/adminMenu/list"),
+        api.get<number[] | null>(`/api/admin/tenantFeature/${tenant.id}`),
+      ]);
+      const menus = allMenus.data || [];
+      setMenuTree(buildMenuTree(menus));
+      // null 表示未配置（全部启用），用所有菜单ID
+      const ids = featureIds.data ?? menus.map((m: SysMenu) => m.id);
+      setCheckedMenuIds(new Set(ids));
+      // 默认展开所有有子节点的目录
+      const expandIds = new Set<number>();
+      menus.forEach((m: SysMenu) => {
+        if (m.menuType === "M") expandIds.add(m.id);
+      });
+      setExpandedNodes(expandIds);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "加载功能配置失败");
+    } finally {
+      setLoadingFeatures(false);
+    }
+  }
+
+  /** 递归收集节点及子孙ID */
+  function collectDescendantIds(node: SysMenu & { children?: SysMenu[] }): number[] {
+    const ids = [node.id];
+    (node.children || []).forEach((c) => ids.push(...collectDescendantIds(c as SysMenu & { children?: SysMenu[] })));
+    return ids;
+  }
+
+  /** 切换菜单勾选（级联子节点） */
+  function toggleFeatureMenu(node: SysMenu & { children?: SysMenu[] }) {
+    const descendantIds = collectDescendantIds(node);
+    const allChecked = descendantIds.every((id) => checkedMenuIds.has(id));
+    setCheckedMenuIds((prev) => {
+      const next = new Set(prev);
+      if (allChecked) descendantIds.forEach((id) => next.delete(id));
+      else descendantIds.forEach((id) => next.add(id));
+      return next;
+    });
+  }
+
+  /** 展开/折叠目录 */
+  function toggleExpand(id: number) {
+    setExpandedNodes((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  /** 保存功能配置 */
+  async function saveFeatureConfig() {
+    if (!configFeatures) return;
+    setSavingFeatures(true);
+    try {
+      await api.put(`/api/admin/tenantFeature/${configFeatures.id}`, {
+        menuIds: Array.from(checkedMenuIds),
+      });
+      toast.success("功能配置已保存");
+      setConfigFeatures(null);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "保存失败");
+    } finally {
+      setSavingFeatures(false);
+    }
+  }
+
+  /** 渲染菜单树节点 */
+  function renderMenuNode(node: SysMenu & { children?: SysMenu[] }, depth: number = 0) {
+    const hasChildren = (node.children || []).length > 0;
+    const isExpanded = expandedNodes.has(node.id);
+    const isChecked = checkedMenuIds.has(node.id);
+    const typeIcon = node.menuType === "M"
+      ? <Folder className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+      : <File className="h-3.5 w-3.5 text-slate-400 shrink-0" />;
+    return (
+      <div key={node.id}>
+        <div
+          className="flex items-center gap-2 py-1 hover:bg-slate-50 rounded px-1"
+          style={{ paddingLeft: `${depth * 20 + 4}px` }}
+        >
+          {hasChildren ? (
+            <button onClick={() => toggleExpand(node.id)} className="shrink-0 text-slate-400 hover:text-slate-600">
+              {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+            </button>
+          ) : <span className="w-4 shrink-0" />}
+          <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
+            <input
+              type="checkbox"
+              checked={isChecked}
+              onChange={() => toggleFeatureMenu(node)}
+              className="h-4 w-4 accent-indigo-600 shrink-0"
+            />
+            {typeIcon}
+            <span className="text-sm truncate">{node.menuName}</span>
+            {node.perms && <span className="text-xs text-muted-foreground font-mono truncate ml-auto">{node.perms}</span>}
+          </label>
+        </div>
+        {hasChildren && isExpanded && node.children!.map((c) => renderMenuNode(c as SysMenu & { children?: SysMenu[] }, depth + 1))}
+      </div>
+    );
   }
 
   /** 打开设置管理员对话框 */
@@ -258,16 +386,26 @@ function TenantAdminPage() {
                       {t.remark || "-"}
                     </TableCell>
                     <TableCell className="text-right">
-                      {/* 仅平台管理员可设置租户管理员 */}
+                      {/* 仅平台管理员可操作 */}
                       {isAdmin && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          title="设置管理员（仅平台管理员）"
-                          onClick={() => openSetAdmin(t)}
-                        >
-                          <UserCog className="h-4 w-4 text-indigo-500" />
-                        </Button>
+                        <>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            title="配置功能模块"
+                            onClick={() => openFeatureConfig(t)}
+                          >
+                            <Settings2 className="h-4 w-4 text-emerald-500" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            title="设置管理员"
+                            onClick={() => openSetAdmin(t)}
+                          >
+                            <UserCog className="h-4 w-4 text-indigo-500" />
+                          </Button>
+                        </>
                       )}
                       <Button
                         variant="ghost"
@@ -410,6 +548,41 @@ function TenantAdminPage() {
             </Button>
             <Button onClick={save} disabled={saving} className="min-w-24">
               {saving ? "保存中..." : "保存"}
+            </Button>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
+
+      {/* 配置功能模块 */}
+      <Sheet open={!!configFeatures} onOpenChange={(open) => !open && setConfigFeatures(null)}>
+        <SheetContent className="sm:max-w-lg">
+          <SheetHeader className="border-b pb-4">
+            <SheetTitle>配置功能模块</SheetTitle>
+            <SheetDescription>
+              为「{configFeatures?.tenantName}」配置可用的功能模块，租户管理员只能使用已启用的功能
+            </SheetDescription>
+          </SheetHeader>
+          <div className="flex-1 overflow-y-auto py-2">
+            {loadingFeatures ? (
+              <p className="py-10 text-center text-sm text-muted-foreground">加载中...</p>
+            ) : (
+              <div className="space-y-0.5">
+                {menuTree.map((node) => renderMenuNode(node as SysMenu & { children?: SysMenu[] }))}
+                {menuTree.length === 0 && (
+                  <p className="py-10 text-center text-sm text-muted-foreground">暂无菜单数据</p>
+                )}
+              </div>
+            )}
+          </div>
+          <SheetFooter className="border-t pt-4">
+            <span className="text-xs text-muted-foreground mr-auto">
+              已选 {checkedMenuIds.size} 项
+            </span>
+            <Button variant="outline" onClick={() => setConfigFeatures(null)}>
+              取消
+            </Button>
+            <Button onClick={saveFeatureConfig} disabled={savingFeatures || loadingFeatures} className="min-w-24">
+              {savingFeatures ? "保存中..." : "保存"}
             </Button>
           </SheetFooter>
         </SheetContent>

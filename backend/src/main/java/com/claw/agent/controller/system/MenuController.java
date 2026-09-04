@@ -36,10 +36,14 @@ public class MenuController {
     private final MenuService menuService;
 
     /** 全部启用菜单（扁平，前端按 parentId 组树） */
-    @Operation(summary = "菜单列表", description = "全部启用菜单（扁平，前端按 parentId 组树）")
+    @Operation(summary = "菜单列表", description = "全部启用菜单（平台管理员返回全部，租户管理员按租户功能配置过滤）")
     @GetMapping("/list")
     public Mono<Result<List<Menu>>> list() {
-        return ReactiveSupport.call(u -> menuService.listEnabledMenus());
+        return ReactiveSupport.call(u -> {
+            List<Menu> menus = menuService.listEnabledMenus();
+            // 平台管理员返回全部，租户管理员按租户功能配置过滤
+            return menuService.filterMenusByTenant(u.getTenantId(), menus);
+        });
     }
 
     /** 新增菜单/按钮（平台管理员） */

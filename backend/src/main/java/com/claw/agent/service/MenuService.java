@@ -61,4 +61,15 @@ public interface MenuService extends IService<Menu> {
      * @param roleIds 角色ID列表（可为空表示解除本租户全部关联）
      */
     void saveMenuRoles(LoginUser current, Long menuId, List<Long> roleIds);
+
+    /**
+     * 根据租户功能配置过滤菜单列表。
+     * <p>
+     * 如果租户没有配置记录，返回原始菜单列表（向后兼容）。
+     *
+     * @param tenantId 租户ID
+     * @param menus    原始菜单列表
+     * @return 过滤后的菜单列表
+     */
+    List<Menu> filterMenusByTenant(Long tenantId, List<Menu> menus);
 }

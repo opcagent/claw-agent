@@ -336,6 +336,7 @@ export default function TokenUsagePage() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>时间</TableHead>
+                      <TableHead>调用人</TableHead>
                       <TableHead>会话 ID</TableHead>
                       <TableHead>提供商</TableHead>
                       <TableHead>模型</TableHead>
@@ -352,6 +353,7 @@ export default function TokenUsagePage() {
                           <TableCell className="font-mono text-xs">
                             {formatTime(log.usageTime)}
                           </TableCell>
+                          <TableCell className="text-sm">{log.username || "-"}</TableCell>
                           <TableCell className="font-mono text-xs truncate max-w-[100px]">
                             {log.sessionId || "-"}
                           </TableCell>

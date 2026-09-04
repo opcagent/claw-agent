@@ -3,6 +3,7 @@ package com.claw.agent.model;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
@@ -22,36 +23,47 @@ import lombok.EqualsAndHashCode;
 public class UserChannel extends BaseEntity {
 
     /** 主键 */
+    @Schema(description = "主键")
     @TableId(type = IdType.AUTO)
     private Long id;
 
     /** 平台用户 ID（关联 sys_user.id） */
+    @Schema(description = "用户ID")
     private String userId;
 
     /** 渠道类型：wechat / slack / telegram / web */
+    @Schema(description = "渠道类型")
     private String channelType;
 
     /** 渠道侧用户标识（如微信 openid、Slack user_id） */
+    @Schema(description = "渠道用户标识")
     private String channelUserId;
 
     /** 渠道侧显示名（如微信昵称） */
+    @Schema(description = "渠道显示名")
     private String channelUsername;
 
     /** 群组 ID（单聊为 NULL，群聊必填） */
+    @Schema(description = "群组ID")
     private String channelGroupId;
 
     /** 群组名称（如微信群名、Slack channel 名） */
+    @Schema(description = "群组名称")
     private String channelGroupName;
 
     /** 群内角色：owner / admin / member */
+    @Schema(description = "群内角色")
     private String groupRole;
 
     /** OAuth access_token（加密存储） */
+    @Schema(description = "access_token(加密)")
     private String accessToken;
 
     /** OAuth refresh_token（加密存储） */
+    @Schema(description = "refresh_token(加密)")
     private String refreshToken;
 
     /** 状态：1 启用 / 0 禁用 */
+    @Schema(description = "状态：1启用/0禁用")
     private Integer status;
 }
