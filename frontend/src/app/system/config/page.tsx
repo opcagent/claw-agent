@@ -615,19 +615,19 @@ function ConfigPage() {
             <Table>
               <TableHeader>
                 <TableRow className="bg-slate-50/60">
-                  <TableHead>配置键</TableHead>
+                  <TableHead>配置项</TableHead>
                   <TableHead>值</TableHead>
                   <TableHead>说明</TableHead>
-                  <TableHead className="text-right">操作</TableHead>
+                  <TableHead className="text-right sticky right-0 bg-slate-50/60 z-10">操作</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {params.map((c) => (
                   <TableRow key={c.configKey}>
-                    <TableCell className="font-mono text-xs">{c.configKey}</TableCell>
+                    <TableCell className="text-sm">{paramKeys.find((k) => k.key === c.configKey)?.description || c.configKey}</TableCell>
                     <TableCell className="font-mono text-xs">{c.configValue}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">{c.remark || "-"}</TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="text-right sticky right-0 bg-white z-10">
                       <Button variant="ghost" size="icon" onClick={() => setEditParam({ ...c })}>
                         <Pencil className="h-4 w-4 text-slate-500" />
                       </Button>
@@ -1182,9 +1182,9 @@ function ConfigPage() {
           {editParam && (
             <div className="flex-1 space-y-5 overflow-y-auto py-2">
               <div className="space-y-1.5">
-                <Label>配置键</Label>
+                <Label>配置项</Label>
                 {editParam.id ? (
-                  <Input className="font-mono" value={editParam.configKey} disabled />
+                  <Input className="font-mono" value={paramKeys.find((k) => k.key === editParam.configKey)?.description || editParam.configKey} disabled />
                 ) : (
                   // 新增从目录选择：自动回填默认值与说明，避免凭空猜键名；
                   // 目录外的自定义键留「自定义」选项兼容扩展
@@ -1208,7 +1208,7 @@ function ConfigPage() {
                   >
                     {paramKeys.map((k) => (
                       <option key={k.key} value={k.key}>
-                        {k.key}（{(k.description || "").slice(0, 18)}…）
+                        {k.description || k.key}
                       </option>
                     ))}
                     <option value="__custom__">自定义键…</option>
